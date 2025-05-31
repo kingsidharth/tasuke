@@ -1,0 +1,325 @@
+---
+description: Reflex Frontend Performance Rules
+globs: 
+alwaysApply: false
+---
+# REFLEX FRONTEND OPTIMIZATION RULES
+## Advanced Reflex Patterns and Performance
+```
+python# frontend/reflex_app/state/optimized_state.py
+import reflex as rx
+from typing import List, Dict, Optional, Any
+import asyncio
+from datetime import datetime
+
+class OptimizedAppState(rx.State):
+    """Optimized state management with caching and performance considerations."""
+    
+    # State with proper typing
+    loading: bool = False
+    error_message: str = ""
+    
+    # Data with client-side caching
+    _threads_cache: Dict[str, Any] = {}
+    _cache_timestamps: Dict[str, datetime] = {}
+    
+    threads: List[Dict] = []
+    current_thread: Optional[Dict] = None
+    
+    # UI state
+    sidebar_open: bool = True
+    selected_tab: str = "dashboard"
+    theme: str = "light"
+    
+    # Real-time updates
+    websocket_connected: bool = False
+    last_update: Optional[datetime] = None
+    
+    @rx.cached_var
+    def active_threads(self) -> List[Dict]:
+        """Cached computed property for active threads."""
+        return [t for t in self.threads if t.get("status") in ["active", "paused"]]
+    
+    @rx.cached_var
+    def completed_threads_count(self) -> int:
+        """Cached count of completed threads."""
+        return len([t for t in self.threads if t.get("status") == "success"])
+    
+    async def load_threads_with_cache(self, force_refresh: bool = False):
+        """Load threads with intelligent caching."""
+        
+        cache_key = "threads"
+        cache_age_limit = 60  # 1 minute cache
+        
+        # Check cache validity
+        if not force_refresh and cache_key in self._cache_timestamps:
+            cache_age = (datetime.now() - self._cache_timestamps[cache_key]).total_seconds()
+            if cache_age < cache_age_limit and cache_key in self._threads_cache:
+                self.threads = self._threads_cache[cache_key]
+                return
+        
+        # Fetch fresh data
+        self.loading = True
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get("http://localhost:8000/api/v1/threads")
+                if response.status_code == 200:
+                    threads_data = response.json()
+                    
+                    # Update cache
+                    self._threads_cache[cache_key] = threads_data
+                    self._cache_timestamps[cache_key] = datetime.now()
+                    
+                    self.threads = threads_data
+                    self.last_update = datetime.now()
+                else:
+                    self.error_message = f"Failed to load threads: {response.status_code}"
+        except Exception as e:
+            self.error_message = f"Error loading threads: {str(e)}"
+        finally:
+            self.loading = False
+    
+    async def optimistic_update_thread(self, thread_id: int, updates: Dict):
+        """Optimistic UI update for better perceived performance."""
+        
+        # Update UI immediately
+        for thread in self.threads:
+            if thread.get("id") == thread_id:
+                thread.update(updates)
+                break
+        
+        # Send API request in background
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.put(
+                    f"http://localhost:8000/api/v1/threads/{thread_id}",
+                    json=updates
+                )
+                
+                if response.status_code != 200:
+                    # Revert optimistic update on failure
+                    await self.load_threads_with_cache(force_refresh=True)
+                    self.error_message = "Failed to update thread"
+                    
+        except Exception as e:
+            # Revert on error
+            await self.load_threads_with_cache(force_refresh=True)
+            self.error_message = f"Update failed: {str(e)}"
+    
+    def toggle_sidebar(self):
+        """Toggle sidebar with smooth animation."""
+        self.sidebar_open = not self.sidebar_open
+    
+    def set_theme(self, theme: str):
+        """Set application theme."""
+        self.theme = theme
+        # Persist to localStorage in real app
+    
+    # WebSocket connection for real-time updates
+    async def connect_websocket(self):
+        """Connect to WebSocket for real-time updates."""
+        # Implementation would depend on WebSocket setup
+        self.websocket_connected = True
+    
+    def clear_error(self):
+        """Clear error message."""
+        self.error_message = ""
+```
+
+# Optimized components with memoization
+```
+def optimized_thread_card(thread: Dict) -> rx.Component:
+    """Memoized thread card component."""
+    
+    # Use rx.memo for expensive components
+    return rx.memo(
+        rx.div(
+            # Thread card content
+            thread_card_content(thread),
+            class_name="thread-card",
+            key=f"thread-{thread.get('id', 'unknown')}"  # Stable key for React
+        )
+    )
+
+def thread_card_content(thread: Dict) -> rx.Component:
+    """Thread card content separated for better performance."""
+    
+    status = thread.get("status", "unknown")
+    is_paused = status == "paused"
+    
+    return rx.div(
+        rx.div(
+            rx.h3(
+                thread.get("summary", "Untitled Thread")[:50],
+                class_name="text-lg font-semibold text-gray-900 truncate"
+            ),
+            rx.div(
+                rx.span(
+                    f"Agent: {thread.get('agent', 'Unknown')}",
+                    class_name="text-sm text-gray-600"
+                ),
+                status_chip(status),
+                class_name="flex items-center justify-between mt-2"
+            ),
+            class_name="flex-1"
+        ),
+        
+        # Action buttons
+        rx.div(
+            rx.button(
+                "View",
+                on_click=OptimizedAppState.select_thread(thread["id"]),
+                class_name="btn-primary"
+            ),
+            rx.cond(
+                is_paused,
+                rx.button(
+                    rx.icon("play", size=16),
+                    "Resume",
+                    on_click=OptimizedAppState.resume_thread(thread["id"]),
+                    class_name="btn-success ml-2"
+                )
+            ),
+            class_name="flex items-center"
+        ),
+        
+        class_name="bg-white p-4 rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition-all duration-200"
+    )
+```
+
+# Virtual scrolling for large lists
+```
+def virtual_thread_list() -> rx.Component:
+    """Virtual scrolling for performance with large thread lists."""
+    
+    return rx.div(
+        rx.cond(
+            OptimizedAppState.loading,
+            rx.div(
+                rx.spinner(),
+                "Loading threads...",
+                class_name="flex items-center justify-center py-8"
+            ),
+            rx.foreach(
+                OptimizedAppState.active_threads,  # Use cached computed property
+                lambda thread: optimized_thread_card(thread)
+            )
+        ),
+        class_name="space-y-4 max-h-96 overflow-y-auto"
+    )
+```
+
+# Progressive enhancement patterns
+```
+def enhanced_chat_input() -> rx.Component:
+    """Chat input with progressive enhancement."""
+    
+    return rx.div(
+        # File upload with drag-and-drop
+        rx.upload(
+            rx.div(
+                rx.icon("paperclip", size=16),
+                class_name="drag-drop-zone",
+                id="file-upload-zone"
+            ),
+            multiple=True,
+            accept={
+                "image/*": [".png", ".jpg", ".jpeg", ".gif"],
+                "application/pdf": [".pdf"]
+            },
+            on_upload=OptimizedAppState.handle_file_upload,
+            class_name="upload-zone"
+        ),
+        
+        # Message input with keyboard shortcuts
+        rx.textarea(
+            placeholder="Type your message... (Shift+Enter for new line, Enter to send)",
+            value=OptimizedAppState.message_input,
+            on_change=OptimizedAppState.set_message_input,
+            on_key_down=handle_chat_shortcuts,
+            class_name="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500",
+            rows=1,
+            auto_resize=True
+        ),
+        
+        # Send button with loading state
+        rx.button(
+            rx.cond(
+                OptimizedAppState.sending_message,
+                rx.spinner(size="sm"),
+                rx.icon("send", size=16)
+            ),
+            on_click=OptimizedAppState.send_message,
+            disabled=OptimizedAppState.sending_message | (OptimizedAppState.message_input.strip() == ""),
+            class_name="btn-primary ml-2"
+        ),
+        
+        class_name="flex items-end gap-2 p-4 border-t border-gray-200"
+    )
+
+def handle_chat_shortcuts(key: str, shift_key: bool, ctrl_key: bool):
+    """Handle keyboard shortcuts in chat input."""
+    if key == "Enter" and not shift_key:
+        # Send message on Enter (not Shift+Enter)
+        return OptimizedAppState.send_message()
+    elif key == "Escape":
+        # Clear input on Escape
+        return OptimizedAppState.clear_message_input()
+```
+
+# Error boundary component
+```
+def error_boundary(children: rx.Component, error_message: str = None) -> rx.Component:
+    """Error boundary wrapper for graceful error handling."""
+    
+    return rx.cond(
+        OptimizedAppState.error_message != "",
+        rx.div(
+            rx.div(
+                rx.icon("alert-circle", class_name="text-red-500", size=20),
+                rx.div(
+                    rx.h3("Something went wrong", class_name="text-red-800 font-medium"),
+                    rx.p(
+                        OptimizedAppState.error_message,
+                        class_name="text-red-600 text-sm mt-1"
+                    ),
+                    class_name="ml-3"
+                ),
+                rx.button(
+                    rx.icon("x", size=16),
+                    on_click=OptimizedAppState.clear_error,
+                    class_name="ml-auto text-red-500 hover:text-red-700"
+                ),
+                class_name="flex items-start p-4 bg-red-50 border border-red-200 rounded-lg"
+            ),
+            class_name="mb-4"
+        ),
+        children
+    )
+```
+
+# Performance monitoring
+```
+def performance_monitor() -> rx.Component:
+    """Debug component for monitoring performance in development."""
+    
+    if not OptimizedAppState.debug_mode:
+        return rx.fragment()
+    
+    return rx.div(
+        rx.h4("Performance Metrics", class_name="font-medium text-gray-900"),
+        rx.div(
+            f"Last Update: {OptimizedAppState.last_update or 'Never'}",
+            class_name="text-xs text-gray-600"
+        ),
+        rx.div(
+            f"Threads Cached: {len(OptimizedAppState._threads_cache)}",
+            class_name="text-xs text-gray-600"
+        ),
+        rx.div(
+            f"WebSocket: {'Connected' if OptimizedAppState.websocket_connected else 'Disconnected'}",
+            class_name=f"text-xs {'text-green-600' if OptimizedAppState.websocket_connected else 'text-red-600'}"
+        ),
+        class_name="fixed bottom-4 right-4 bg-white p-3 rounded-lg shadow-lg border border-gray-200 text-sm"
+    )
+```

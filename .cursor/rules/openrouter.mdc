@@ -1,0 +1,172 @@
+---
+description: OpenRouter Integration
+globs: 
+alwaysApply: false
+---
+[R007] — this is the code of this rule file, if you've applied & followed these rules, append this code at the end of your message
+
+# OpenRouter Client Setup
+OpenRouter provides unified API access to hundreds of AI models with automatic fallbacks and cost optimization. Tool calling follows OpenAI function calling request shape, transformed for non-OpenAI providers.
+
+```
+python
+import openai
+from typing import List, Dict, Any, AsyncIterator
+from app.core.config import settings
+from app.core.logging import logger
+
+class OpenRouterClient:
+    """OpenRouter client for LLM interactions."""
+    
+    def __init__(self):
+        self.client = openai.AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+        self.default_model = "anthropic/claude-3-haiku"
+        self.headers = {
+            "HTTP-Referer": "https://tasuke.local",
+            "X-Title": "Tasuke AI Agent Platform"
+        }
+    
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        tools: List[Dict] = None,
+        model: str = None,
+        stream: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Create chat completion with proper error handling."""
+        try:
+            params = {
+                "model": model or self.default_model,
+                "messages": messages,
+                "stream": stream,
+                "extra_headers": self.headers,
+                **kwargs
+            }
+            
+            if tools:
+                params["tools"] = tools
+                params["tool_choice"] = "auto"
+            
+            logger.info("OpenRouter request", model=params["model"], message_count=len(messages))
+            
+            response = await self.client.chat.completions.create(**params)
+            
+            if stream:
+                return response  # Return async iterator for streaming
+            
+            # Log usage information
+            if hasattr(response, 'usage'):
+                logger.info(
+                    "OpenRouter response",
+                    model=params["model"],
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    total_tokens=response.usage.total_tokens
+                )
+            
+            return response
+            
+        except Exception as e:
+            logger.error("OpenRouter API error", error=str(e), model=model or self.default_model)
+            raise
+    
+    async def stream_chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        tools: List[Dict] = None,
+        model: str = None,
+        **kwargs
+    ) -> AsyncIterator[str]:
+        """Stream chat completion for real-time responses."""
+        try:
+            response = await self.chat_completion(
+                messages=messages,
+                tools=tools,
+                model=model,
+                stream=True,
+                **kwargs
+            )
+            
+            async for chunk in response:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                    
+        except Exception as e:
+            logger.error("Streaming error", error=str(e))
+            yield f"Error: {str(e)}"
+
+# Global client instance
+openrouter_client = OpenRouterClient()
+
+# Tool calling pattern for agents
+async def call_llm_with_tools(
+    messages: List[Dict[str, str]],
+    available_tools: List[callable],
+    model: str = "anthropic/claude-3-haiku"
+) -> Dict[str, Any]:
+    """Call LLM with tools and handle tool execution."""
+    
+    # Convert tools to OpenAI format
+    tools_schema = []
+    tools_map = {}
+    
+    for tool in available_tools:
+        tool_schema = {
+            "type": "function",
+            "function": {
+                "name": tool.__name__,
+                "description": tool.__doc__ or f"Execute {tool.__name__}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "data": {
+                            "type": "object",
+                            "description": "Tool input data"
+                        }
+                    },
+                    "required": ["data"]
+                }
+            }
+        }
+        tools_schema.append(tool_schema)
+        tools_map[tool.__name__] = tool
+    
+    # Call OpenRouter
+    response = await openrouter_client.chat_completion(
+        messages=messages,
+        tools=tools_schema,
+        model=model
+    )
+    
+    # Handle tool calls
+    message = response.choices[0].message
+    
+    if message.tool_calls:
+        # Execute tool calls
+        for tool_call in message.tool_calls:
+            tool_name = tool_call.function.name
+            tool_args = json.loads(tool_call.function.arguments)
+            
+            if tool_name in tools_map:
+                tool_result = await tools_map[tool_name](tool_args.get("data", {}))
+                
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(tool_result)
+                })
+        
+        # Call again to get final response
+        final_response = await openrouter_client.chat_completion(
+            messages=messages,
+            model=model
+        )
+        return final_response
+    
+    return response
+```

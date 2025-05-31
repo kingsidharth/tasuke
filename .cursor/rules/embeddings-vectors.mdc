@@ -1,0 +1,144 @@
+---
+description: Embeddings & Vectors Rulew
+globs: 
+alwaysApply: false
+---
+
+# EMBEDDINGS & VECTOR OPERATIONS RULES
+## HuggingFace Embeddings Integration
+```
+python# app/integrations/embeddings.py
+import asyncio
+import aiohttp
+import numpy as np
+from typing import List, Union
+from app.core.config import settings
+from app.core.logging import logger
+import time
+
+class EmbeddingsClient:
+    """HuggingFace Inference API client for embeddings."""
+    
+    def __init__(self):
+        self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/BAAI/bge-small-en-v1.5"
+        self.headers = {"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"}
+        self.dimension = 384  # BGE-small embedding dimension
+        
+    async def generate_embedding(self, text: str) -> List[float]:
+        """Generate embedding for a single text."""
+        return await self.generate_embeddings([text])[0]
+    
+    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts efficiently."""
+        
+        if not texts:
+            return []
+        
+        start_time = time.time()
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json={"inputs": texts, "options": {"wait_for_model": True}}
+                ) as response:
+                    
+                    if response.status == 200:
+                        embeddings = await response.json()
+                        
+                        # Handle single text vs batch
+                        if isinstance(embeddings[0], list) and isinstance(embeddings[0][0], float):
+                            # Single text - wrap in list
+                            embeddings = [embeddings]
+                        
+                        duration = time.time() - start_time
+                        logger.info(
+                            "Embeddings generated",
+                            texts_count=len(texts),
+                            duration_ms=round(duration * 1000, 2),
+                            avg_chars=sum(len(t) for t in texts) / len(texts)
+                        )
+                        
+                        return embeddings
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"HuggingFace API error {response.status}: {error_text}")
+                        
+        except Exception as e:
+            logger.error("Embedding generation failed", error=str(e), texts_count=len(texts))
+            raise
+```
+
+# Global embeddings client
+`embeddings_client = EmbeddingsClient()`
+
+# Background task for embedding generation
+```
+from celery import Celery
+from app.db.session import get_db
+from app.db.models import RawNote, Task, Thread
+
+celery_app = Celery("tasuke_worker")
+
+@celery_app.task
+async def generate_raw_note_embedding(note_id: int):
+    """Generate embedding for a raw note."""
+    
+    try:
+        async with get_db() as db:
+            note = await db.get(RawNote, note_id)
+            if not note or note.content_vector:
+                return  # Note not found or already has embedding
+            
+            # Generate embedding
+            embedding = await embeddings_client.generate_embedding(note.content)
+            
+            # Update note with embedding
+            note.content_vector = embedding
+            await db.commit()
+            
+            logger.info("Embedding generated for raw note", note_id=note_id)
+            
+    except Exception as e:
+        logger.error("Failed to generate embedding", note_id=note_id, error=str(e))
+        raise
+
+@celery_app.task
+async def generate_thread_summary_embedding(thread_id: int):
+    """Generate embedding for thread summary."""
+    
+    try:
+        async with get_db() as db:
+            thread = await db.get(Thread, thread_id)
+            if not thread or not thread.summary or thread.summary_embedding:
+                return
+            
+            embedding = await embeddings_client.generate_embedding(thread.summary)
+            thread.summary_embedding = embedding
+            await db.commit()
+            
+            logger.info("Summary embedding generated", thread_id=thread_id)
+            
+    except Exception as e:
+        logger.error("Failed to generate summary embedding", thread_id=thread_id, error=str(e))
+        raise
+```
+
+# Automatic embedding generation triggers
+```
+from sqlalchemy.event import listens_for
+
+@listens_for(RawNote, 'after_insert')
+def trigger_note_embedding(mapper, connection, target):
+    """Trigger embedding generation after note creation."""
+    if target.content and not target.content_vector:
+        # Schedule background task
+        generate_raw_note_embedding.delay(target.id)
+
+@listens_for(Thread, 'after_update')
+def trigger_summary_embedding(mapper, connection, target):
+    """Trigger summary embedding when summary is updated."""
+    if target.summary and not target.summary_embedding:
+        generate_thread_summary_embedding.delay(target.id)
+```

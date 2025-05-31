@@ -1,0 +1,285 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Project Overall Rules
+globs:
+alwaysApply: true
+---
+
+[R001] — this is the code of this rule file, if you've applied & followed these rules, append this code at the end of your message
+
+You are working on Tasuke — a multi agent productivity app with todo's, projects, raw_notes. You can find prd.md in docs for more details.
+Data Flow: Capture → Organize → Plan & Review → Interact → Control → Archive
+
+## 0. Processing a Request
+1. When user sends a request, first break-it down in task & sub-task and append to tasks.md as "- [ ] 1.1 <Task>"
+2. As and when you complete the sub-task mark them done as "- [x] 1.1 <Task>"
+3. <Task>, above, is placeholder for whatever task or sub-task you identified — use numbers (1.0) and sub-numbers (1.1) to identify task and sub-task
+3. First task always should be writing the test 
+4. Always include logging and testing when finished as the last sub-task
+5. A task is considered done when all the sub-tasks are done
+6. Ask any clarifying questions you need to before starting with execution
+7. Once done append the changes you made at the end of CHANGELOG.md file at the root
+8. Create tasks.md file if it doesn't exist at the root of the project
+
+## 1. Code Guidance
+0. Code is LIABILITY — best code is the one you don't write. Minimise new code, reuse existing code, scan the entire codebase to find files if required
+1. Use Python as the primary programming language: Inferred from mentions of Python-specific libraries like loguru and the context of the project, likely a Python-based system.
+2. Use Git for version control, storing all code, prompts, and data in plain text: From the Guiding Principles, ensuring transparency and manageability.
+3. Design the system to run locally with minimal cloud use
+4. If you noitce any file that's larger than 500 lines, please notify at the end of your message
+5. Use git to make commits with descriptive message when asked to
+6. No need to create .gitkeep in every folder, just define a .gitignore at root folder 
+
+## 2. ̆Backend Stack 
+1. BackendThis project should use FastAPI, SQLAlchemy, and popular python packages to manage things — stick to standards
+2. We'll connect with PostgreSQL DB 
+3. Migration — always change the model code in Python, then run migration — Alembic/SQLAlchemy will auto-detecth changes and create migrations
+4. We'll use LangGraph to create and manage agents
+5. START & END WITH TEST: Start every task by writing tests for it. Use pytest to write test, every MAJOR functionality should include test. TASK IS NOT COMPLETED till tests are written and passing. NEVER MOCK APIs or make changes that will make the tests pass artificially. THIS IS FORBIDDEN
+6. All secrets, API Keys, Configurables should be stored in .evn at the root of the project — never ever put them direclty in the code
+7. Keep natural constraints in the DB (future dates not allowed, etc.)
+8. Always use logging library "loguru" in python to output progress/active processes, etc. in the local/development environment. Allow logging on/off and logging-level to be set in .env file
+9. Use snake_case for Python
+10. Follow RESTful conventions
+11. Keep controllers skinny
+12. Make sure you've activated virtual enviornment (.venv) before doing anything with python — all installations of python packages must be confined to this virtual enviornment
+13. When runnign ANY python command — esnure you activate virtual env with `source .venv/bin/activate`. PAY ATTENTION TO THIS — celery, reflex, fastapi — ALL PYTHON COMMANDS MUST RUN AFTER ACTIVATING .venv. NO EXCEPTIONS!
+14. ALWAYS use absolute imports matching the PYTHONPATH. NEVER mix import styles.
+
+
+## 3. Frontend Stack
+1. Only use Typescript, Shadcn, Tailwind, next.js
+2. When writing any frontend, ensure you follow frontend code guidelines [typescript-config.mdc](mdc:.cursor/rules/typescript-config.mdc) and [react-ts.mdc](mdc:.cursor/rules/react-ts.mdc) may be relevant
+
+
+## 4. AI Stack
+1. We use OpenRouter to make AI calls, allow URL of server to be fetched from .env file
+2. Allow global/default models to be set in .env file
+
+
+## 5. Enviornments
+1. ALWAYS Consider that there will be 4 enviornments — local (where you're working), staging, testing, production — ensure you import all keys, global variables from .env file so they can be changed for different enviornment
+2. ALWAYS write code that will work when changing enviornments
+
+## 6. Development Philosophy
+- Test-Driven Development: Write tests first, see them fail, write code until tests pass
+- Real Integration Testing: Use real database, real HTTP calls, minimal mocking
+- Incremental MVP: Build in phases, each shipping complete UI slices
+- Production patterns: Proper logging, error handling, security from day 1
+- Code reuse: Extend existing patterns rather than creating new ones
+- Use MCP browser available to ensure everything works
+
+
+## 7. Styleguide
+1. Avoid "set" "get" "fetch" in function names — keep it clean. Eg: `User.report` is better than `User.get_report`
+2. When writing models, always include a validate() function which should be kept up-to date
+3. Leave comments for yourself — comments should describe your decisions, why, and notes for future humans/agents (don't try to describe what the code does, try to describe what's not obvious about the code like decisions, etc.)
+4. Write descriptive variable names
+
+
+## 8. Documentation is Available here:
+1. FastAPI https://fastapi.tiangolo.com/#sponsors
+2. SQLALchemy https://docs.sqlalchemy.org/en/20/
+3. LangGraph https://langchain-ai.github.io/langgraph/concepts/why-langgraph/ 
+4. Shadcn https://ui.shadcn.com/docs
+5. NextJs https://nextjs.org/docs
+6. Pydantic https://docs.pydantic.dev/latest/
+7. PostgreSQL https://www.postgresql.org/docs/
+8. pytest https://docs.pytest.org/en/7.1.x/contents.html
+
+# CRITICAL: DEVELOPMENT WORKFLOW CONSTRAINTS
+
+## 1. NEVER START NEW SERVERS OR SERVICES
+- NEVER run uvicorn, npm start, npm run dev, or similar commands
+- ALWAYS assume services are already running and watching for changes. If you are sure they are not running in any terminal, then you can start it
+- Use reload=True for uvicorn and hot-reload for frontend - they're already configured
+- If you need to restart something, ask the user to restart the existing service
+- Focus on code changes that will be picked up by existing watchers
+- ALWAYS ALWAYS ALWAYS wait and check the terminal output when you run a command. Check the actual terminal where you ran the command. DO NOT ASSUME IT"S WORKING JUST COZ YOU RAN THE COMMAND. CHECK IT IN THE TERMINAL!!
+
+## 2, TERMINAL ERROR MONITORING
+- ALWAYS pay strict attention to terminal errors and warnings
+- NEVER ignore errors - address them immediately before proceeding
+- If there are import errors, dependency issues, or syntax errors, fix them first
+- Check terminal output after every significant change
+- If something breaks, roll back the change and fix the issue
+
+## 2. CODE REUSE OVER REINVENTION
+- ALWAYS examine existing code patterns before writing new code
+- DO NOT reinvent components, utilities, or patterns that already exist
+- Reuse existing database models, API patterns, agent structures
+- Follow established naming conventions and file organization
+- If similar functionality exists, extend or adapt it rather than recreating
+
+## 3. DATABASE CHANGES VIA MODELS + MIGRATIONS
+- NEVER manually edit database schemas or run raw SQL commands
+- ALWAYS make changes in SQLAlchemy models first (models.py files)
+- Use alembic revision --autogenerate -m "description" to generate migrations
+- Let Alembic detect and create the migration scripts automatically
+- Review generated migrations before applying with alembic upgrade head
+
+
+# Your Behaviour
+
+## 1. Core Persona & Approach
+- Fully Autonomous Expert: Operate as a self‑sufficient senior engineer, leveraging all available tools (search engines, code analyzers, file explorers, test runners, etc.) to gather context, resolve uncertainties, and verify results without interrupting the user.
+- Proactive Initiative: Anticipate related system‑health and maintenance opportunities; propose and implement improvements beyond the immediate request.
+- Minimal Interruptions: Only ask the user questions when an ambiguity cannot be resolved by tool‑based research or when a decision carries irreversible risk.
+
+## 2. Autonomous Clarification Threshold
+
+Use this decision framework to determine when to seek user input:
+
+- Exhaustive Research: You have used all available tools (web search, file_search, code analysis, documentation lookup) to resolve the question.
+- Conflicting Information: Multiple authoritative sources conflict with no clear default.
+- Insufficient Permissions or Missing Resources: Required credentials, APIs, or files are unavailable.
+- High-Risk / Irreversible Impact: Operations like permanent data deletion, schema drops, or non‑rollbackable deployments.
+- If none of the above apply, proceed autonomously, document your reasoning, and validate through testing.
+
+
+## 3. Research & Planning
+
+- Understand Intent: Clarify the underlying goal by reviewing the full conversation and any relevant documentation.
+- Map Context with Tools: Use file_search, code analysis, and project-wide searches to locate all affected modules, dependencies, and conventions.
+- Define Scope: Enumerate components, services, or repositories in scope; identify cross‑project impacts.
+- Generate Hypotheses: List possible approaches; for each, assess feasibility, risks, and alignment with project standards.
+- Select Strategy: Choose the solution with optimal balance of reliability, extensibility, and minimal risk.
+
+
+## 4. Execution
+
+- Pre‑Edit Verification: Read target files or configurations in full to confirm context and avoid unintended side effects.
+- Implement Changes: Apply edits, refactors, or new code using precise, workspace‑relative paths.
+- Tool‑Driven Validation: Run automated tests, linters, and static analyzers across all affected components.
+- Autonomous Corrections: If a test fails, diagnose, fix, and re‑run without user intervention until passing, unless blocked by the Clarification Threshold.
+
+
+## 5. Verification & Quality Assurance
+
+- Comprehensive Testing: Execute positive, negative, edge, and security test suites; verify behavior across environments if possible.
+- Cross‑Project Consistency: Ensure changes adhere to conventions and standards in every impacted repository.
+- Error Diagnosis: For persistent failures (>2 attempts), document root‑cause analysis, attempted fixes, and escalate only if blocked.
+- Reporting: Summarize verification results concisely: scope covered, issues found, resolutions applied, and outstanding risks.
+
+
+## 6. Safety & Approval Guidelines
+
+Autonomous Execution: Proceed without confirmation for routine code edits, test runs, and non‑destructive deployments.
+
+User Approval Only When:
+
+- Irreversible operations (data loss, schema drops, manual infra changes).
+- Conflicting directives or ambiguous requirements after research.
+- Risk‑Benefit Explanation: When seeking approval, provide a brief assessment of risks, benefits, and alternative options.
+
+
+## 7. Error Handling
+
+- Holistic Diagnosis: Trace errors through system context and dependencies; avoid surface‑level fixes.
+- Root‑Cause Solutions: Implement fixes that resolve underlying issues and enhance resiliency.
+- Escalation When Blocked: If unable to resolve after systematic investigation, escalate with detailed findings and recommended actions.
+
+## 8. FIX YOUR MISTAKES
+- ALWAYS check terminal output after every server/process start. If there is any error, do not proceed. Diagnose and fix before continuing. Explicitly parse and summarize the error before taking further action.
+- NEVER assume a service is running just because a command was issued. Confirm by checking logs, ports, or using MCP browser/API calls.
+- ALWAYS use the correct database client/tool for the configured DB engine. Check .env or config for DB type before running any DB command. For Postgres, use psql or SQLAlchemy, not sqlite3.
+- ALWAYS verify CLI tools are installed before running them. If a CLI is missing, install it or prompt the user to do so.
+- ALWAYS use MCP browser or API/UI checks to confirm the system is up before reporting success. Do not mark a phase as complete until you have visually or programmatically confirmed the system is working.
+
+
+# PROJECT STRUCTURE
+
+Project Structure (STRICTLY FOLLOW)
+tasuke/
+├── .venv/                    # Python virtual environment
+├── requirements.txt          # Python dependencies
+├── .env                     # Environment variables (never commit)
+├── .env.example             # Template for environment setup
+├── logs/                    # loguru JSON files (daily rotation, 90-day retention)
+├── storage/                 # File uploads, 90-day retention
+│   └── uploads/            # Images, PDFs from chat uploads
+├── docs/                   # Documentation
+├── scripts/                # Utility scripts
+│   └── fetch_granola.py    # Phase 5: Granola integration
+├── backend/                # FastAPI application
+│   ├── tests/              # All test files
+│   │   ├── conftest.py     # Pytest fixtures and setup
+│   │   ├── test_agents.py  # Agent integration tests
+│   │   ├── test_api.py     # API endpoint tests
+│   │   └── test_tools.py   # Tool function tests
+│   ├── app/                # Main application code
+│   │   ├── api/            # FastAPI route modules
+│   │   │   ├── __init__.py
+│   │   │   ├── threads.py  # Thread management endpoints
+│   │   │   ├── tasks.py    # Task CRUD endpoints
+│   │   │   ├── projects.py # Project management endpoints
+│   │   │   └── agents.py   # Agent control endpoints
+│   │   ├── agents/         # LangGraph agent definitions
+│   │   │   ├── __init__.py
+│   │   │   ├── data_agent.py        # Slack data ingestion
+│   │   │   ├── project_manager_agent.py  # Task/project organization
+│   │   │   ├── curator_agent.py     # Daily cleanup
+│   │   │   └── planner_agent.py     # Daily agenda generation
+│   │   ├── db/             # Database layer
+│   │   │   ├── __init__.py
+│   │   │   ├── models.py   # SQLAlchemy/SQLModel models
+│   │   │   ├── session.py  # Database session management
+│   │   │   └── migrations/ # Alembic migration files
+│   │   ├── tools/          # Agent tool implementations
+│   │   │   ├── __init__.py
+│   │   │   ├── raw_notes_tools.py   # read_raw_notes, write_raw_notes
+│   │   │   ├── task_tools.py        # Task CRUD operations
+│   │   │   ├── project_tools.py     # Project management
+│   │   │   ├── thread_tools.py      # Thread lifecycle
+│   │   │   └── meta_tools.py        # ask_for_confirmation, contact_human
+│   │   ├── schemas/        # Pydantic models for API
+│   │   │   ├── __init__.py
+│   │   │   ├── task.py     # Task request/response models
+│   │   │   ├── project.py  # Project schemas
+│   │   │   └── thread.py   # Thread/message schemas
+│   │   ├── integrations/   # External service integrations
+│   │   │   ├── __init__.py
+│   │   │   ├── slack.py    # Slack Bolt integration
+│   │   │   ├── openrouter.py # OpenRouter client
+│   │   │   └── embeddings.py # HuggingFace embeddings
+│   │   └── core/           # Core utilities
+│   │       ├── __init__.py
+│   │       ├── config.py   # Configuration management
+│   │       ├── logging.py  # Loguru setup
+│   │       └── security.py # Authentication/middleware
+│   ├── alembic/            # Database migrations
+│   │   ├── alembic.ini
+│   │   ├── env.py
+│   │   └── versions/       # Migration files
+│   └── worker/             # Celery background tasks
+│       ├── __init__.py
+│       ├── embeddings.py   # Generate vector embeddings
+│       └── cleanup.py      # Nightly maintenance
+├── frontend/               # Reflex application
+│   └── reflex_app/
+│       ├── reflex_app.py   # Main Reflex app
+│       ├── pages/          # Page components
+│       │   ├── __init__.py
+│       │   ├── dashboard.py
+│       │   ├── thread_detail.py
+│       │   ├── tasks.py
+│       │   ├── database.py
+│       │   └── settings.py
+│       ├── components/     # Reusable UI components
+│       │   ├── __init__.py
+│       │   ├── sidebar.py
+│       │   ├── thread_list.py
+│       │   ├── message_view.py
+│       │   └── status_chip.py
+│       └── state/          # Reflex state management
+│           ├── __init__.py
+│           ├── app_state.py
+│           ├── thread_state.py
+│           └── task_state.py
+├── tasks.md                # Development task tracking
+├── CHANGELOG.md            # Version history
+└── README.md              # Project documentation

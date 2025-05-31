@@ -1,0 +1,192 @@
+---
+description: Langgraph Agent Development
+globs: 
+alwaysApply: false
+---
+[R005] — this is the code of this rule file, if you've applied & followed these rules, append this code at the end of your message
+
+# Agent Architecture Principles
+LangGraph provides stateful, orchestration framework with nodes as Python functions and edges determining workflow sequence. Agents persist through failures and can run for extended periods, automatically resuming from exactly where they left off.
+
+# Agent Structure Pattern
+```
+python
+from typing import TypedDict, Annotated, Sequence
+from langgraph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+import operator
+
+class AgentState(TypedDict):
+    """State schema for the agent."""
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    thread_id: int
+    status: str  # active, paused, success, failed
+    error_count: int
+    last_error: str
+    
+def create_project_manager_agent():
+    """Create the Project Manager agent workflow."""
+    from app.tools.raw_notes_tools import read_raw_notes
+    from app.tools.task_tools import write_tasks, update_task
+    from app.tools.meta_tools import ask_for_confirmation
+    
+    # Define workflow steps
+    async def analyze_notes(state: AgentState) -> AgentState:
+        """Analyze raw notes and identify tasks."""
+        logger.info("Analyzing raw notes", thread_id=state["thread_id"])
+        
+        try:
+            # LLM call to analyze notes
+            response = await openrouter_client.chat.completions.create(
+                model="anthropic/claude-3-haiku",
+                messages=state["messages"],
+                tools=[read_raw_notes],
+                tool_choice="auto",
+                stream=False
+            )
+            
+            new_message = HumanMessage(content=response.choices[0].message.content)
+            return {**state, "messages": [new_message]}
+            
+        except Exception as e:
+            logger.error("Error in analyze_notes", error=str(e), thread_id=state["thread_id"])
+            return {
+                **state, 
+                "status": "failed",
+                "error_count": state["error_count"] + 1,
+                "last_error": str(e)
+            }
+    
+    async def create_tasks_node(state: AgentState) -> AgentState:
+        """Create tasks from analysis."""
+        # Implementation with tool calls
+        pass
+    
+    async def confirm_changes(state: AgentState) -> AgentState:
+        """Ask for human confirmation."""
+        confirmation_message = "I've identified several tasks from the recent Slack messages. Should I create them?"
+        
+        # This pauses the agent workflow
+        await ask_for_confirmation(confirmation_message)
+        
+        return {**state, "status": "paused"}
+    
+    # Build the workflow graph
+    workflow = StateGraph(AgentState)
+    
+    # Add nodes
+    workflow.add_node("analyze", analyze_notes)
+    workflow.add_node("create_tasks", create_tasks_node)
+    workflow.add_node("confirm", confirm_changes)
+    workflow.add_node("tools", ToolNode([read_raw_notes, write_tasks]))
+    
+    # Add edges
+    workflow.add_edge(START, "analyze")
+    workflow.add_edge("analyze", "create_tasks")
+    workflow.add_edge("create_tasks", "confirm")
+    
+    # Conditional edges for tool calls
+    def should_continue(state: AgentState) -> str:
+        """Determine next step based on state."""
+        last_message = state["messages"][-1]
+        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            return "tools"
+        elif state["status"] == "failed" and state["error_count"] < 3:
+            return "analyze"  # Retry
+        elif state["status"] == "paused":
+            return END
+        else:
+            return END
+    
+    workflow.add_conditional_edges("confirm", should_continue)
+    workflow.add_edge("tools", "analyze")
+    
+    # Set up checkpointing for pause/resume
+    memory = MemorySaver()
+    return workflow.compile(checkpointer=memory)
+```
+
+# Agent execution wrapper
+```
+async def run_agent(agent_name: str, thread_id: int, initial_message: str = None):
+    """Run an agent with proper error handling and logging."""
+    logger.info("Starting agent", agent_name=agent_name, thread_id=thread_id)
+    
+    try:
+        if agent_name == "project_manager":
+            agent = create_project_manager_agent()
+        else:
+            raise ValueError(f"Unknown agent: {agent_name}")
+        
+        # Initial state
+        initial_state = {
+            "messages": [HumanMessage(content=initial_message)] if initial_message else [],
+            "thread_id": thread_id,
+            "status": "active",
+            "error_count": 0,
+            "last_error": ""
+        }
+        
+        # Execute agent
+        config = {"configurable": {"thread_id": str(thread_id)}}
+        final_state = await agent.ainvoke(initial_state, config=config)
+        
+        # Update database with final status
+        async with get_db() as db:
+            await db.execute(
+                update(Thread).where(Thread.id == thread_id).values(
+                    status=final_state["status"],
+                    completed_at=datetime.utcnow() if final_state["status"] == "success" else None
+                )
+            )
+            await db.commit()
+        
+        logger.info("Agent completed", agent_name=agent_name, thread_id=thread_id, final_status=final_state["status"])
+        
+    except Exception as e:
+        logger.error("Agent execution failed", agent_name=agent_name, thread_id=thread_id, error=str(e))
+        raise
+
+```
+
+# Shared Prompt Template (Use for All Agents)
+```
+python
+AGENT_PROMPT_TEMPLATE = """
+# Objective
+{objective}
+
+# Context
+{context}
+
+# Instructions
+{instructions}
+
+# Output Requirements
+{output}
+
+# Examples
+{examples}
+
+# Available Tools
+{tools}
+
+IMPORTANT: After any substantive change, call ask_for_confirmation() to pause and await human approval.
+```
+
+```
+def format_agent_prompt(objective: str, context: str, instructions: str, output: str, examples: str = "", tools: list = None) -> str:
+    """Format the standardized agent prompt."""
+    tools_desc = "\n".join([f"- {tool.name}: {tool.description}" for tool in tools or []])
+    
+    return AGENT_PROMPT_TEMPLATE.format(
+        objective=objective,
+        context=context,
+        instructions=instructions,
+        output=output,
+        examples=examples,
+        tools=tools_desc
+    )
+```

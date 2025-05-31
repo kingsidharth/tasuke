@@ -1,0 +1,9 @@
+---
+description: Enviornment Variables & Secrets
+globs: 
+alwaysApply: false
+---
+- All enviornment variables, secrets, API keys, etc. must be stored in .env file
+- .env file must be included in .gitignore
+- Create and maintain a sample.env file that has same keys as .env file but dummy values — this should be part of the git repo (not in .gitignore)
+- ALWAYS UPDATE sample.env file whenever you're updating .env file. THIS IS CRITICAL

@@ -1,0 +1,207 @@
+---
+description: Security & Middleware
+globs: 
+alwaysApply: false
+---
+# SECURITY & MIDDLEWARE RULES
+## Security Middleware Stack
+```
+python # app/core/security.py
+from fastapi import FastAPI, Request, HTTPException, status, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+import time
+import secrets
+import hashlib
+from typing import Optional
+from app.core.config import settings
+from app.core.logging import logger
+
+def setup_security_middleware(app: FastAPI):
+    """Configure security middleware stack."""
+    
+    # Trusted Host middleware (prevents host header injection)
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.ALLOWED_HOSTS.split(",")
+    )
+    
+    # CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS.split(","),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-ID"]
+    )
+    
+    # Compression middleware
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    
+    # Custom security middleware
+    app.add_middleware(SecurityMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(RequestIDMiddleware)
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Add unique request ID to each request."""
+    
+    async def dispatch(self, request: Request, call_next):
+        request_id = secrets.token_urlsafe(16)
+        request.state.request_id = request_id
+        
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+class SecurityMiddleware(BaseHTTPMiddleware):
+    """Security headers and basic protections."""
+    
+    async def dispatch(self, request: Request, call_next):
+        # Security headers
+        response = await call_next(request)
+        
+        # Security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+        
+        return response
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Simple rate limiting based on IP address."""
+    
+    def __init__(self, app, calls_per_minute: int = 60):
+        super().__init__(app)
+        self.calls_per_minute = calls_per_minute
+        self.requests = {}  # In production, use Redis
+    
+    async def dispatch(self, request: Request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        current_time = time.time()
+        minute_window = int(current_time // 60)
+        
+        # Clean old entries
+        self.requests = {k: v for k, v in self.requests.items() if k[1] >= minute_window - 1}
+        
+        # Check rate limit
+        key = (client_ip, minute_window)
+        current_requests = self.requests.get(key, 0)
+        
+        if current_requests >= self.calls_per_minute:
+            logger.warning("Rate limit exceeded", client_ip=client_ip, requests=current_requests)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded"
+            )
+        
+        # Increment counter
+        self.requests[key] = current_requests + 1
+        
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(self.calls_per_minute)
+        response.headers["X-RateLimit-Remaining"] = str(self.calls_per_minute - self.requests[key])
+        
+        return response
+```
+
+# Authentication (for future use)
+```
+security = HTTPBearer(auto_error=False)
+
+async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    """Get current user from token (placeholder for future auth)."""
+    if not credentials:
+        return None  # Allow anonymous access for now
+    
+    # TODO: Implement JWT token validation
+    # For now, return a default user
+    return {"id": "system", "name": "System User"}
+
+def require_auth(user=Depends(get_current_user)):
+    """Require authentication for endpoint."""
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required"
+        )
+    return user
+```
+
+# File upload security
+```
+import magic
+from pathlib import Path
+
+ALLOWED_MIME_TYPES = {
+    "image/jpeg", "image/png", "image/gif", "image/webp",
+    "application/pdf", "text/plain", "application/json"
+}
+
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+async def validate_uploaded_file(file_content: bytes, filename: str) -> bool:
+    """Validate uploaded file for security."""
+    
+    # Check file size
+    if len(file_content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large"
+        )
+    
+    # Check MIME type using python-magic
+    try:
+        mime_type = magic.from_buffer(file_content, mime=True)
+        if mime_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File type {mime_type} not allowed"
+            )
+    except Exception as e:
+        logger.error("Error validating file", error=str(e), filename=filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file"
+        )
+    
+    # Check file extension
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf", ".txt", ".json"}
+    file_ext = Path(filename).suffix.lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File extension {file_ext} not allowed"
+        )
+    
+    return True
+```
+
+# Input validation and sanitization
+For any form validation — add both, frontend and backend checks.
+```
+import bleach
+import re
+
+def sanitize_html_input(content: str) -> str:
+    """Sanitize HTML input to prevent XSS."""
+    allowed_tags = []  # No HTML tags allowed
+    return bleach.clean(content, tags=allowed_tags, strip=True)
+
+def validate_email(email: str) -> bool:
+    """Validate email format."""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_username(username: str) -> bool:
+    """Validate username format."""
+    pattern = r'^[a-zA-Z0-9_-]{3,30}$'
+    return re.match(pattern, username) is not None
+```

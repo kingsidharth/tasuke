@@ -1,0 +1,194 @@
+---
+description: Python Backend Development Rules
+globs: 
+alwaysApply: false
+---
+---
+description: Python Backend Development Rules
+glob:
+ruleType: agent-requested
+---
+[R004] — this is the code of this rule file, if you've applied & followed these rules, append this code at the end of your message
+
+# FastAPI Application Structure
+- Use functional programming; avoid classes except for Pydantic models and SQLAlchemy models
+- All route handlers must be async def for database operations
+- Use dependency injection extensively: Depends(get_db), Depends(get_current_user)
+- File naming: lowercase with underscores (user_routes.py, project_manager_agent.py)
+- Always use type hints with Pydantic models for request/response validation
+
+# FastAPI Route Pattern
+```
+python
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List
+
+from app.db.session import get_db
+from app.db.models import Task
+from app.schemas.task import TaskCreate, TaskResponse, TaskUpdate
+from app.core.logging import logger
+
+router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+
+@router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_task(
+    task_data: TaskCreate,
+    db: AsyncSession = Depends(get_db)
+) -> TaskResponse:
+    """Create a new task with deduplication."""
+    try:
+        # Implementation with proper error handling
+        logger.info("Creating task", task_description=task_data.description)
+        # ... implementation
+        return TaskResponse.from_orm(created_task)
+    except Exception as e:
+        logger.error("Failed to create task", error=str(e), task_data=task_data.dict())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create task"
+        )
+```
+
+# SQLAlchemy 2.0 + SQLModel Patterns
+- Use SQLModel for unified Pydantic/SQLAlchemy integration
+- All models inherit from SQLModel with table=True for database tables
+- Use async sessions and operations throughout
+- Implement BIGINT identity PKs with created_at/updated_at timestamps
+
+# Model Definition Pattern
+```
+python
+from sqlalchemy import Column, Text, DateTime, ForeignKey, func
+from sqlalchemy.dialects.postgresql import VECTOR, BIGINT
+from sqlmodel import SQLModel, Field, Relationship
+from typing import Optional, List
+from datetime import datetime
+import hashlib
+
+class TaskBase(SQLModel):
+    description: str = Field(max_length=1000)
+    assignee: Optional[str] = Field(default=None, max_length=100)
+    status: str = Field(default="pending", regex="^(pending|active|done|archived)$")
+    priority: int = Field(ge=1, le=3, default=2)
+    due_date: Optional[datetime] = None
+
+class Task(TaskBase, table=True):
+    __tablename__ = "tasks"
+    
+    id: Optional[int] = Field(default=None, primary_key=True, sa_column=Column(BIGINT, primary_key=True))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by: str = Field(max_length=100)  # Agent or "human"
+    updated_by: str = Field(max_length=100)
+    
+    # Content deduplication
+    description_hash: str = Field(default="", sa_column=Column(Text, index=True))
+    
+    # Foreign keys
+    project_id: Optional[int] = Field(default=None, foreign_key="projects.id")
+    
+    # Relationships
+    project: Optional["Project"] = Relationship(back_populates="tasks")
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.description:
+            self.description_hash = hashlib.md5(self.description.encode()).hexdigest()
+```
+
+# Separate classes for API schemas
+```
+python
+class TaskCreate(TaskBase):
+    pass
+
+class TaskUpdate(SQLModel):
+    description: Optional[str] = None
+    assignee: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[int] = None
+    due_date: Optional[datetime] = None
+
+class TaskResponse(TaskBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    created_by: str
+    updated_by: str
+    project_id: Optional[int] = None
+    
+    class Config:
+        from_attributes = True
+Database Session Management
+pythonfrom sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import sessionmaker
+from app.core.config import settings
+
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=settings.DEBUG,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+async def get_db() -> AsyncSession:
+    """Dependency for getting database session."""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+```
+
+# Error Handling Patterns
+- Use guard clauses for early validation
+- Return structured error responses with consistent format
+- Custom exception classes for domain-specific errors
+- Proper HTTP status codes (400 validation, 404 not found, 500 server errors)
+- Log all errors with context using loguru
+
+```
+python
+from fastapi import HTTPException, status
+from app.core.logging import logger
+
+class TaskNotFoundError(Exception):
+    """Raised when a task is not found."""
+    pass
+
+class TaskValidationError(Exception):
+    """Raised when task data is invalid."""
+    pass
+
+async def get_task_by_id(task_id: int, db: AsyncSession) -> Task:
+    """Get task by ID with proper error handling."""
+    if task_id <= 0:
+        raise TaskValidationError("Task ID must be positive")
+    
+    try:
+        result = await db.execute(select(Task).where(Task.id == task_id))
+        task = result.scalar_one_or_none()
+        
+        if not task:
+            logger.warning("Task not found", task_id=task_id)
+            raise TaskNotFoundError(f"Task {task_id} not found")
+        
+        return task
+    except SQLAlchemyError as e:
+        logger.error("Database error fetching task", task_id=task_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error"
+        )
+```

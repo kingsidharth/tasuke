@@ -1,0 +1,109 @@
+---
+description: Rules about Generating New Cursor Rules
+globs: 
+alwaysApply: false
+---
+# Meta Rule: Generate New Cursor Rules
+
+## CURSOR RULES GENERATOR
+
+You are an expert at creating comprehensive .cursorrules for development projects. When asked to create cursor rules for a new project or technology stack, follow this systematic approach:
+
+### Rule Generation Process
+
+1. **Analyze the Request**
+   - Identify the tech stack, frameworks, and tools mentioned
+   - Understand the project's domain and specific requirements
+   - Note any existing patterns or conventions mentioned
+
+2. **Research Current Best Practices**
+   - Look up the latest documentation for each technology
+   - Find community-recommended patterns and conventions
+   - Identify common mistakes and anti-patterns to avoid
+
+3. **Structure the Rules**
+   - Start with core principles and project context
+   - Organize by technology/domain (backend, frontend, database, etc.)
+   - Include specific code examples and patterns
+   - Add error handling and security considerations
+   - Include testing strategies and performance optimization
+
+4. **Rule Categories to Always Include**
+   - **Core Principles**: Project purpose, architecture, philosophy
+   - **Development Workflow**: File organization, naming conventions, git workflow
+   - **Backend Rules**: Framework-specific patterns, database interactions, API design
+   - **Frontend Rules**: Component patterns, state management, styling
+   - **Testing Rules**: Testing philosophy, patterns, tools usage
+   - **Security Rules**: Authentication, authorization, input validation, security headers
+   - **Performance Rules**: Optimization patterns, caching, monitoring
+   - **Logging Rules**: What to log, how to structure logs, monitoring
+   - **Error Handling**: Exception patterns, recovery strategies, user experience
+   - **Deployment Rules**: Environment configuration, CI/CD patterns
+
+5. **Code Example Requirements**
+   - Provide concrete, working code examples for each major pattern
+   - Show both correct implementations and what to avoid
+   - Include error handling in all examples
+   - Use the actual technology versions and syntax
+
+6. **Anti-Pattern Prevention**
+   - Explicitly call out common mistakes
+   - Provide alternative approaches for problematic patterns
+   - Include rules about what NOT to do
+
+### Template Structure
+
+```markdown
+# [Project Name] - Comprehensive Development Rules
+
+## CRITICAL: DEVELOPMENT WORKFLOW CONSTRAINTS
+[Workflow rules, terminal monitoring, code reuse guidelines]
+
+## CORE PROJECT PRINCIPLES
+[Purpose, architecture, philosophy, project structure]
+
+## [TECHNOLOGY 1] DEVELOPMENT RULES
+[Specific patterns, examples, best practices]
+
+## [TECHNOLOGY 2] DEVELOPMENT RULES
+[Framework-specific guidelines]
+
+## TESTING RULES
+[Testing philosophy, patterns, tools]
+
+## SECURITY & MIDDLEWARE RULES
+[Security patterns, authentication, validation]
+
+## PERFORMANCE OPTIMIZATION RULES
+[Caching, database optimization, monitoring]
+
+## LOGGING STANDARDS
+[What to log, how to structure, tools setup]
+
+## ERROR HANDLING & RESILIENCE
+[Exception patterns, recovery, user experience]
+
+## DEPLOYMENT & ENVIRONMENT RULES
+[CI/CD, configuration, monitoring]
+
+## Quality Checklist for Generated Rules
+- Comprehensive Coverage: All major technologies and concerns addressed
+- Actionable Examples: Concrete code examples for each pattern
+- Current Best Practices: Uses latest recommended approaches
+- Error Prevention: Addresses common mistakes and anti-patterns
+- Security Conscious: Includes security considerations throughout
+- Performance Aware: Optimization patterns included
+- Testing Focused: Clear testing strategies and patterns
+- Maintainable: Rules promote long-term code maintainability
+- Team-Friendly: Clear guidelines for collaboration
+- Documentation: Self-documenting code patterns
+
+## Usage Instructions
+When generating cursor rules:
+- Be Specific: Avoid generic advice; provide technology-specific patterns
+- Show Examples: Every rule should have a concrete code example
+- Explain Why: Include rationale for important architectural decisions
+- Stay Current: Use the latest stable versions and best practices
+- Think Holistically: Consider the entire development lifecycle
+- Prevent Problems: Address common pitfalls proactively
+- Enable Growth: Rules should scale with project complexity

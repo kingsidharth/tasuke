@@ -1,0 +1,19 @@
+---
+description: 
+globs: *.tsx
+alwaysApply: false
+---
+---
+description: TypeScript Configuration
+globs:
+ruleType: auto-attached
+---
+[R003] — this is the code of this rule file, if you've applied & followed these rules, append this code at the end of your message
+
+Enable "strict": true in tsconfig.json.
+
+Explicitly type function returns and object literals.
+
+Enforce noImplicitAny, strictNullChecks, strictFunctionTypes.
+
+Minimize use of @ts-ignore/@ts-expect-error.

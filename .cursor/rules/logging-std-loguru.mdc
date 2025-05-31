@@ -1,0 +1,209 @@
+---
+description: Logging Standards + Loguru
+globs: 
+alwaysApply: false
+---
+# LOGGING STANDARDS (LOGURU)
+## Comprehensive Logging Setup
+```
+python
+# app/core/logging.py
+import sys
+import json
+from pathlib import Path
+from loguru import logger
+from app.core.config import settings
+
+def setup_logging():
+    """Configure loguru for comprehensive application logging."""
+    
+    # Remove default logger
+    logger.remove()
+    
+    # Console logging for development
+    if settings.DEBUG:
+        logger.add(
+            sys.stdout,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | <level>{message}</level>",
+            level="DEBUG",
+            colorize=True
+        )
+    
+    # File logging for production
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    # Main application log
+    logger.add(
+        "logs/tasuke_{time:YYYY-MM-DD}.log",
+        rotation="00:00",  # Rotate at midnight
+        retention="90 days",  # Keep logs for 90 days
+        compression="gzip",  # Compress old logs
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} | {extra} | {message}",
+        level="INFO",
+        serialize=True,  # JSON format
+        enqueue=True,    # Thread-safe
+        backtrace=True,  # Include traceback on errors
+        diagnose=True    # Include variable values in traceback
+    )
+    
+    # Separate logs for different components
+    logger.add(
+        "logs/agents_{time:YYYY-MM-DD}.log",
+        rotation="00:00",
+        retention="90 days",
+        compression="gzip",
+        filter=lambda record: "agent" in record["extra"],
+        level="INFO",
+        serialize=True
+    )
+    
+    logger.add(
+        "logs/api_{time:YYYY-MM-DD}.log",
+        rotation="00:00",
+        retention="90 days",
+        compression="gzip",
+        filter=lambda record: "api" in record["extra"],
+        level="INFO",
+        serialize=True
+    )
+    
+    logger.add(
+        "logs/database_{time:YYYY-MM-DD}.log",
+        rotation="00:00",
+        retention="90 days",
+        compression="gzip",
+        filter=lambda record: "database" in record["extra"],
+        level="WARNING",  # Only log warnings and errors for DB
+        serialize=True
+    )
+    
+    # Error-only log for critical issues
+    logger.add(
+        "logs/errors_{time:YYYY-MM-DD}.log",
+        rotation="00:00",
+        retention="365 days",  # Keep error logs longer
+        compression="gzip",
+        level="ERROR",
+        serialize=True
+    )
+```
+# Usage patterns throughout the application
+```
+def log_agent_lifecycle(agent_name: str, thread_id: int, status: str, **kwargs):
+    """Log agent lifecycle events."""
+    logger.bind(agent=agent_name, thread_id=thread_id).info(
+        "Agent lifecycle event",
+        status=status,
+        **kwargs
+    )
+
+def log_tool_execution(tool_name: str, execution_time: float, success: bool, **kwargs):
+    """Log tool execution with timing."""
+    logger.bind(tool=tool_name).info(
+        "Tool execution",
+        execution_time_ms=round(execution_time * 1000, 2),
+        success=success,
+        **kwargs
+    )
+
+def log_llm_call(model: str, prompt_tokens: int, completion_tokens: int, cost: float, **kwargs):
+    """Log LLM API calls with usage metrics."""
+    logger.bind(llm=model).info(
+        "LLM API call",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        estimated_cost=cost,
+        **kwargs
+    )
+
+def log_database_operation(operation: str, table: str, duration: float, success: bool, **kwargs):
+    """Log database operations with performance metrics."""
+    logger.bind(database=True, table=table).info(
+        "Database operation",
+        operation=operation,
+        duration_ms=round(duration * 1000, 2),
+        success=success,
+        **kwargs
+    )
+
+def log_user_action(user_id: str, action: str, **kwargs):
+    """Log user interactions for analytics."""
+    logger.bind(user=user_id).info(
+        "User action",
+        action=action,
+        **kwargs
+    )
+```
+
+# FastAPI middleware for request logging
+```
+from fastapi import Request, Response
+import time
+
+async def log_requests(request: Request, call_next):
+    """Log all HTTP requests with timing."""
+    start_time = time.time()
+    
+    # Log request
+    logger.bind(api=True).info(
+        "HTTP request started",
+        method=request.method,
+        url=str(request.url),
+        client_ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent")
+    )
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Log response
+    duration = time.time() - start_time
+    logger.bind(api=True).info(
+        "HTTP request completed", 
+        method=request.method,
+        url=str(request.url),
+        status_code=response.status_code,
+        duration_ms=round(duration * 1000, 2)
+    )
+    
+    return response
+```
+
+# Example usage in application code
+```
+from app.core.logging import logger, log_agent_lifecycle, log_tool_execution
+
+async def example_function():
+    """Example of proper logging usage."""
+    
+    # Basic logging with context
+    logger.info("Starting task processing", task_id=123, user="john_doe")
+    
+    # Agent lifecycle logging
+    log_agent_lifecycle("project_manager", thread_id=456, status="started", input_message="Process new tasks")
+    
+    # Tool execution logging
+    start_time = time.time()
+    try:
+        result = await some_tool_function()
+        execution_time = time.time() - start_time
+        log_tool_execution("write_tasks", execution_time, True, tasks_created=3)
+    except Exception as e:
+        execution_time = time.time() - start_time
+        log_tool_execution("write_tasks", execution_time, False, error=str(e))
+        logger.error("Tool execution failed", tool="write_tasks", error=str(e))
+        raise
+    
+    # Database operation logging
+    db_start = time.time()
+    try:
+        # Database operation
+        db_duration = time.time() - db_start
+        log_database_operation("INSERT", "tasks", db_duration, True, rows_affected=1)
+    except Exception as e:
+        db_duration = time.time() - db_start
+        log_database_operation("INSERT", "tasks", db_duration, False, error=str(e))
+        raise
+```

@@ -1,0 +1,73 @@
+---
+description: FastAPI import rules
+globs: 
+alwaysApply: false
+---
+# FastAPI Imports & Application Structure Rule
+
+## Purpose
+Prevent import errors and circular import issues in multi-file FastAPI projects by following best practices for module/package structure and import style. Ensure all developers use consistent, reliable import patterns for scalable FastAPI applications.
+
+## Core Principles
+- FastAPI projects should be structured as Python packages (directories with `__init__.py` files).
+- Use **absolute imports** for all internal modules (e.g., `from app.api.threads import router as threads_router`).
+- Use **relative imports** (e.g., `from .api import ...`) only within the same package and only when the package is always run as a module (not as a script).
+- The main FastAPI app entrypoint should always use absolute imports to avoid ambiguity and testability issues.
+- All routers should be included in the main app using `app.include_router()`.
+
+## File Structure Example
+```
+tasuke/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   └── threads.py
+│   │   └── ...
+```
+
+## Import Patterns
+
+### Absolute Import (Recommended)
+```python
+# backend/app/main.py
+from backend.app.api.threads import router as threads_router
+app.include_router(threads_router)
+```
+
+### Relative Import (Only within package, not for main entrypoint)
+```python
+# backend/app/api/threads.py
+from ..db.session import get_db
+```
+
+## Test Discovery & Import Issues
+- When running tests, set the `PYTHONPATH` to the project root (e.g., `PYTHONPATH=backend pytest ...`).
+- Avoid running modules as scripts (e.g., `python main.py`) if they use relative imports; always use `python -m backend.app.main` or similar.
+- For test files, always use absolute imports matching the package structure.
+- If you see `ModuleNotFoundError: No module named 'backend'`, your `PYTHONPATH` is likely incorrect or you are running the script from the wrong directory.
+
+## Anti-Patterns
+- ❌ **Do NOT** use relative imports in the main FastAPI entrypoint (`main.py`).
+- ❌ **Do NOT** mix relative and absolute imports in the same file.
+- ❌ **Do NOT** run FastAPI apps as scripts if they use relative imports.
+- ❌ **Do NOT** use sys.path hacks or importlib in production/test code to work around import errors—fix the structure and PYTHONPATH instead.
+
+## Example: Correct Test Setup
+```bash
+# From the project root
+env PYTHONPATH=backend pytest backend/tests/
+```
+
+## References
+- [FastAPI: Bigger Applications - Multiple Files](mdc:https:/fastapi.tiangolo.com/tutorial/bigger-applications)
+- [Python Modules and Packages](mdc:https:/docs.python.org/3/tutorial/modules.html#packages)
+
+## Checklist
+- [ ] All FastAPI routers use absolute imports
+- [ ] All directories are Python packages (`__init__.py` present)
+- [ ] Tests are run with correct `PYTHONPATH`
+- [ ] No sys.path or importlib hacks in production/test code
+- [ ] No relative imports in main entrypoint

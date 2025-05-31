@@ -1,0 +1,24 @@
+---
+description: Slack Integration
+globs: 
+alwaysApply: false
+---
+# Slack Integration Rules (to add to your ruleset):
+- Use Slack Bolt for Python with Socket Mode for all Slack event handling and message sending.
+- Store all Slack tokens (bot, app) in .env and never hardcode them.
+- Register event listeners using @app.message, @app.event, etc., for all Slack event handling.
+- All Slack event handlers must log incoming events and outgoing messages using the project logging standard (loguru).
+- All Slack messages sent by the app must use the say() function or the WebClient for advanced use cases.
+- All incoming Slack events must be deduplicated (if possible) before writing to the database, using event IDs or timestamps.
+- All Slack integration code must be placed in backend/app/integrations/slack.py and imported as needed.
+- On startup, the Slack integration must be started as a background process or thread (not blocking the FastAPI main thread).
+- All errors from Slack API calls must be logged and retried up to 3 times before failing.
+- All Slack event payloads must be stored in the database for traceability (raw_notes or a dedicated table).
+- All outgoing messages must be logged with their Slack message ID and channel.
+- All Slack OAuth scopes required must be documented in the code and .env.example.
+- All Slack integration tests must use real Slack workspaces/tokens (no mocks).
+
+Important links:
+https://tools.slack.dev/bolt-python/getting-started
+https://tools.slack.dev/bolt-python/concepts/message-listening/
+https://tools.slack.dev/bolt-python/concepts/socket-mode

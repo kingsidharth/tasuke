@@ -1,0 +1,523 @@
+---
+description: Testing Rules (Pytest + Integration Testing)
+globs: 
+alwaysApply: false
+---
+
+# TESTING RULES (PYTEST + INTEGRATION TESTING)
+## Testing Philosophy
+- Use real databases and minimal mocking for integration testing to catch bugs related to database implementation. FastAPI testing with pytest is straightforward using TestClient for HTTP requests.
+
+## Test Structure and Configuration
+```
+python
+# conftest.py - Shared test configuration
+import pytest
+import asyncio
+from typing import AsyncGenerator
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
+from fastapi.testclient import TestClient
+from httpx import AsyncClient
+
+from app.main import app
+from app.db.models import Base
+from app.db.session import get_db
+from app.core.config import settings
+
+# Test database URL (use separate test database)
+TEST_DATABASE_URL = settings.DATABASE_URL.replace("/tasuke", "/tasuke_test")
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create event loop for async tests."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest.fixture(scope="session")
+async def test_engine():
+    """Create test database engine."""
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,  # Set to True for SQL debugging
+        poolclass=NullPool,  # Disable connection pooling for tests
+    )
+    
+    # Create all tables
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    
+    yield engine
+    
+    # Cleanup
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    
+    await engine.dispose()
+
+@pytest.fixture
+async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
+    """Create database session for tests with transaction rollback."""
+    async_session = async_sessionmaker(
+        bind=test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    
+    async with async_session() as session:
+        # Start transaction
+        transaction = await session.begin()
+        
+        try:
+            yield session
+        finally:
+            # Rollback transaction to ensure test isolation
+            await transaction.rollback()
+            await session.close()
+
+@pytest.fixture
+def override_get_db(db_session):
+    """Override database dependency for testing."""
+    async def _override_get_db():
+        yield db_session
+    
+    app.dependency_overrides[get_db] = _override_get_db
+    yield
+    app.dependency_overrides.clear()
+
+@pytest.fixture
+async def async_client(override_get_db) -> AsyncGenerator[AsyncClient, None]:
+    """Create async HTTP client for testing."""
+    async with AsyncClient(app=app, base_url="http://testserver") as client:
+        yield client
+
+@pytest.fixture
+def sync_client(override_get_db) -> TestClient:
+    """Create sync HTTP client for testing."""
+    return TestClient(app)
+
+# Test data fixtures
+@pytest.fixture
+async def sample_project(db_session) -> Project:
+    """Create sample project for testing."""
+    from app.db.models import Project
+    
+    project = Project(
+        name="Test Project",
+        description="A test project for integration testing",
+        status="active"
+    )
+    db_session.add(project)
+    await db_session.commit()
+    await db_session.refresh(project)
+    return project
+
+@pytest.fixture
+async def sample_task(db_session, sample_project) -> Task:
+    """Create sample task for testing."""
+    from app.db.models import Task
+    
+    task = Task(
+        description="Test task for integration testing",
+        assignee="test_user",
+        status="pending",
+        priority=2,
+        project_id=sample_project.id,
+        created_by="test_agent",
+        updated_by="test_agent"
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+    return task
+
+@pytest.fixture
+async def sample_thread(db_session) -> Thread:
+    """Create sample thread for testing."""
+    from app.db.models import Thread
+    
+    thread = Thread(
+        agent="test_agent",
+        status="active",
+        summary="Test thread for integration testing"
+    )
+    db_session.add(thread)
+    await db_session.commit()
+    await db_session.refresh(thread)
+    return thread
+```
+
+## API Integration Tests
+```
+python
+# test_api.py - API endpoint integration tests
+import pytest
+from httpx import AsyncClient
+from fastapi import status
+
+class TestTaskAPI:
+    """Integration tests for task API endpoints."""
+    
+    async def test_create_task_success(self, async_client: AsyncClient, sample_project):
+        """Test successful task creation."""
+        task_data = {
+            "description": "New integration test task",
+            "assignee": "john_doe",
+            "priority": 1,
+            "project_id": sample_project.id
+        }
+        
+        response = await async_client.post("/api/v1/tasks/", json=task_data)
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        response_data = response.json()
+        assert response_data["description"] == task_data["description"]
+        assert response_data["assignee"] == task_data["assignee"]
+        assert response_data["priority"] == task_data["priority"]
+        assert response_data["project_id"] == sample_project.id
+        assert response_data["status"] == "pending"
+        assert response_data["id"] is not None
+    
+    async def test_create_task_duplicate_description(self, async_client: AsyncClient, sample_task):
+        """Test task creation with duplicate description (should deduplicate)."""
+        task_data = {
+            "description": sample_task.description,  # Same description
+            "assignee": "different_user"
+        }
+        
+        response = await async_client.post("/api/v1/tasks/", json=task_data)
+        
+        assert response.status_code == status.HTTP_200_OK  # Returns existing task
+        response_data = response.json()
+        assert response_data["id"] == sample_task.id
+        assert response_data["assignee"] == sample_task.assignee  # Original assignee preserved
+    
+    async def test_create_task_invalid_data(self, async_client: AsyncClient):
+        """Test task creation with invalid data."""
+        task_data = {
+            "description": "",  # Empty description
+            "priority": 5  # Invalid priority (should be 1-3)
+        }
+        
+        response = await async_client.post("/api/v1/tasks/", json=task_data)
+        
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    
+    async def test_get_tasks_list(self, async_client: AsyncClient, sample_task):
+        """Test getting list of tasks."""
+        response = await async_client.get("/api/v1/tasks/")
+        
+        assert response.status_code == status.HTTP_200_OK
+        tasks = response.json()
+        assert len(tasks) >= 1
+        assert any(task["id"] == sample_task.id for task in tasks)
+    
+    async def test_get_task_by_id(self, async_client: AsyncClient, sample_task):
+        """Test getting specific task by ID."""
+        response = await async_client.get(f"/api/v1/tasks/{sample_task.id}")
+        
+        assert response.status_code == status.HTTP_200_OK
+        task_data = response.json()
+        assert task_data["id"] == sample_task.id
+        assert task_data["description"] == sample_task.description
+    
+    async def test_get_task_not_found(self, async_client: AsyncClient):
+        """Test getting non-existent task."""
+        response = await async_client.get("/api/v1/tasks/99999")
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    
+    async def test_update_task(self, async_client: AsyncClient, sample_task):
+        """Test updating task."""
+        update_data = {
+            "status": "done",
+            "assignee": "updated_user"
+        }
+        
+        response = await async_client.put(f"/api/v1/tasks/{sample_task.id}", json=update_data)
+        
+        assert response.status_code == status.HTTP_200_OK
+        updated_task = response.json()
+        assert updated_task["status"] == "done"
+        assert updated_task["assignee"] == "updated_user"
+        assert updated_task["description"] == sample_task.description  # Unchanged
+    
+    async def test_delete_task(self, async_client: AsyncClient, sample_task):
+        """Test deleting task."""
+        response = await async_client.delete(f"/api/v1/tasks/{sample_task.id}")
+        
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        
+        # Verify task is deleted
+        get_response = await async_client.get(f"/api/v1/tasks/{sample_task.id}")
+        assert get_response.status_code == status.HTTP_404_NOT_FOUND
+
+class TestThreadAPI:
+    """Integration tests for thread API endpoints."""
+    
+    async def test_create_thread(self, async_client: AsyncClient):
+        """Test creating new thread."""
+        thread_data = {
+            "agent": "project_manager",
+            "summary": "Test thread creation"
+        }
+        
+        response = await async_client.post("/api/v1/threads/", json=thread_data)
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        thread = response.json()
+        assert thread["agent"] == "project_manager"
+        assert thread["status"] == "queued"
+        assert thread["summary"] == "Test thread creation"
+    
+    async def test_pause_resume_thread(self, async_client: AsyncClient, sample_thread):
+        """Test pausing and resuming thread."""
+        # Pause thread
+        pause_response = await async_client.post(f"/api/v1/threads/{sample_thread.id}/pause")
+        assert pause_response.status_code == status.HTTP_200_OK
+        
+        # Check status
+        get_response = await async_client.get(f"/api/v1/threads/{sample_thread.id}")
+        thread_data = get_response.json()
+        assert thread_data["status"] == "paused"
+        
+        # Resume thread
+        resume_response = await async_client.post(f"/api/v1/threads/{sample_thread.id}/resume")
+        assert resume_response.status_code == status.HTTP_200_OK
+        
+        # Check status
+        get_response = await async_client.get(f"/api/v1/threads/{sample_thread.id}")
+        thread_data = get_response.json()
+        assert thread_data["status"] == "active"
+    
+    async def test_add_message_to_thread(self, async_client: AsyncClient, sample_thread):
+        """Test adding message to thread."""
+        message_data = {
+            "content": "Test message content",
+            "role": "user"
+        }
+        
+        response = await async_client.post(
+            f"/api/v1/threads/{sample_thread.id}/messages",
+            json=message_data
+        )
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        message = response.json()
+        assert message["content"] == "Test message content"
+        assert message["role"] == "user"
+        assert message["thread_id"] == sample_thread.id
+```
+
+## Agent Integration Tests
+```
+python
+# test_agents.py - Agent integration tests
+import pytest
+from unittest.mock import AsyncMock, patch
+from app.agents.project_manager_agent import create_project_manager_agent, run_agent
+from app.tools.task_tools import write_tasks, read_tasks
+from app.db.models import RawNote, Task, Thread
+
+class TestProjectManagerAgent:
+    """Integration tests for Project Manager Agent."""
+    
+    async def test_agent_workflow_with_real_data(self, db_session, sample_thread):
+        """Test complete agent workflow with real database operations."""
+        # Create some raw notes for the agent to process
+        raw_notes = [
+            RawNote(
+                source="slack",
+                source_note_id="slack_123_456",
+                content="We need to implement user authentication for the mobile app",
+                author="john_doe",
+                channel="dev-team"
+            ),
+            RawNote(
+                source="slack",
+                source_note_id="slack_123_457", 
+                content="Don't forget to update the API documentation after the auth changes",
+                author="jane_smith",
+                channel="dev-team"
+            )
+        ]
+        
+        for note in raw_notes:
+            db_session.add(note)
+        await db_session.commit()
+        
+        # Mock OpenRouter responses
+        mock_responses = [
+            # First call - analysis
+            {
+                "choices": [{
+                    "message": {
+                        "content": "I've analyzed the messages and identified 2 tasks: 1) Implement user authentication for mobile app 2) Update API documentation",
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "function": {
+                                "name": "write_tasks",
+                                "arguments": '{"description": "Implement user authentication for mobile app", "assignee": "john_doe"}'
+                            }
+                        }]
+                    }
+                }]
+            },
+            # Second call - after tool execution
+            {
+                "choices": [{
+                    "message": {
+                        "content": "Tasks have been created successfully. Should I proceed with creating the documentation task?",
+                        "tool_calls": []
+                    }
+                }]
+            }
+        ]
+        
+        with patch('app.integrations.openrouter.openrouter_client.chat_completion') as mock_openrouter:
+            mock_openrouter.side_effect = mock_responses
+            
+            # Run the agent
+            await run_agent("project_manager", sample_thread.id, "Process recent dev team messages")
+            
+            # Verify tasks were created
+            tasks_result = await read_tasks({"project_id": None})
+            assert tasks_result["ok"] is True
+            tasks = tasks_result["data"]
+            
+            # Should have at least one task created
+            assert len(tasks) >= 1
+            auth_task = next((t for t in tasks if "authentication" in t["description"]), None)
+            assert auth_task is not None
+            assert auth_task["assignee"] == "john_doe"
+    
+    async def test_agent_error_handling(self, db_session, sample_thread):
+        """Test agent handles errors gracefully."""
+        with patch('app.integrations.openrouter.openrouter_client.chat_completion') as mock_openrouter:
+            # Simulate API error
+            mock_openrouter.side_effect = Exception("OpenRouter API error")
+            
+            # Run agent - should handle error gracefully
+            await run_agent("project_manager", sample_thread.id, "Test error handling")
+            
+            # Check thread status was updated to failed
+            await db_session.refresh(sample_thread)
+            assert sample_thread.status == "failed"
+            assert sample_thread.error_count > 0
+            assert "OpenRouter API error" in sample_thread.last_error
+    
+    async def test_agent_pause_resume_workflow(self, db_session, sample_thread):
+        """Test agent pause/resume functionality."""
+        with patch('app.integrations.openrouter.openrouter_client.chat_completion') as mock_openrouter:
+            # Mock response that triggers confirmation
+            mock_openrouter.return_value = {
+                "choices": [{
+                    "message": {
+                        "content": "I've found 3 urgent tasks. Should I create them?",
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "function": {
+                                "name": "ask_for_confirmation",
+                                "arguments": '{"prompt": "Create 3 urgent tasks?"}'
+                            }
+                        }]
+                    }
+                }]
+            }
+            
+            # Run agent - should pause for confirmation
+            await run_agent("project_manager", sample_thread.id, "Process urgent messages")
+            
+            # Verify thread is paused
+            await db_session.refresh(sample_thread)
+            assert sample_thread.status == "paused"
+            
+            # Test resume functionality would be triggered by UI interaction
+            # This is tested in the API integration tests
+
+class TestToolIntegration:
+    """Integration tests for tool functions."""
+    
+    async def test_write_tasks_deduplication(self, db_session):
+        """Test task creation with deduplication logic."""
+        task_data = {
+            "description": "Implement feature X",
+            "assignee": "developer1"
+        }
+        
+        # Create first task
+        result1 = await write_tasks(task_data)
+        assert result1["ok"] is True
+        task1_id = result1["data"]["id"]
+        
+        # Try to create duplicate task
+        result2 = await write_tasks(task_data)
+        assert result2["ok"] is True
+        task2_id = result2["data"]["id"]
+        
+        # Should return same task (deduplication)
+        assert task1_id == task2_id
+    
+    async def test_read_tasks_filtering(self, db_session, sample_task, sample_project):
+        """Test task reading with various filters."""
+        # Test filter by status
+        result = await read_tasks({"status": "pending"})
+        assert result["ok"] is True
+        pending_tasks = result["data"]
+        assert any(task["id"] == sample_task.id for task in pending_tasks)
+        
+        # Test filter by project
+        result = await read_tasks({"project_id": sample_project.id})
+        assert result["ok"] is True
+        project_tasks = result["data"]
+        assert any(task["id"] == sample_task.id for task in project_tasks)
+        
+        # Test filter by assignee
+        result = await read_tasks({"assignee": sample_task.assignee})
+        assert result["ok"] is True
+        assigned_tasks = result["data"]
+        assert any(task["id"] == sample_task.id for task in assigned_tasks)
+```
+
+## Test Execution Commands
+```
+python
+# pytest.ini configuration
+[tool:pytest]
+testpaths = backend/tests
+python_files = test_*.py
+python_functions = test_*
+python_classes = Test*
+addopts = 
+    -v
+    --tb=short
+    --strict-markers
+    --disable-warnings
+    --asyncio-mode=auto
+    --cov=app
+    --cov-report=term-missing
+    --cov-report=html:htmlcov
+    --cov-fail-under=80
+markers =
+    slow: marks tests as slow (deselect with '-m "not slow"')
+    integration: marks tests as integration tests
+    unit: marks tests as unit tests
+asyncio_mode = auto
+
+# Run specific test types
+# pytest -m integration  # Run only integration tests
+# pytest -m "not slow"   # Skip slow tests
+# pytest --cov-report=html  # Generate HTML coverage report
+# pytest -v -s  # Verbose output with print statements
+```
+
+## NO MOCKING RULES
+- Use real database: Always test against real PostgreSQL with transactions for isolation
+- Use real HTTP calls: Test actual FastAPI endpoints, not mocked responses
+- Mock only external services: Only mock OpenRouter API, Slack API, and other external dependencies
+- Mock sparingly: Only when absolutely necessary (API rate limits, cost, or external service availability)
+- Real file operations: Test actual file uploads and storage operations
+- Real vector operations: Test pgvector similarity searches with real embeddings

@@ -1,0 +1,179 @@
+---
+description: Implementing Tool Calls for Agents
+globs: 
+alwaysApply: false
+---
+[R006] — this is the code of this rule file, if you've applied & followed these rules, append this code at the end of your message
+
+# Tool Contract Standards
+All tools must follow the JSON contract pattern and handle errors gracefully:
+```
+python
+from typing import Dict, Any
+from app.core.logging import logger
+from app.db.session import get_db
+import asyncio
+
+async def write_tasks(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create new tasks with deduplication.
+    
+    Args:
+        data: {
+            "description": str (required),
+            "assignee": str (optional),
+            "project_id": int (optional),
+            "due_date": str (optional, ISO format),
+            "priority": int (optional, 1-3)
+        }
+    
+    Returns:
+        {"ok": true, "data": task_dict} or {"ok": false, "error": "message"}
+    """
+    try:
+        # Validate required fields
+        if not data.get("description"):
+            return {"ok": False, "error": "Description is required"}
+        
+        async with get_db() as db:
+            # Check for duplicates by description hash
+            description = data["description"]
+            content_hash = hashlib.md5(description.encode()).hexdigest()
+            
+            existing_result = await db.execute(
+                select(Task).where(
+                    Task.description_hash == content_hash,
+                    Task.status != "done"  # Allow recreating completed tasks
+                )
+            )
+            existing_task = existing_result.scalar_one_or_none()
+            
+            if existing_task:
+                logger.info("Task already exists", description_hash=content_hash, task_id=existing_task.id)
+                return {"ok": True, "data": existing_task.dict()}
+            
+            # Create new task
+            task_data = {
+                "description": description,
+                "created_by": "agent",  # Will be overridden by actual agent name
+                "updated_by": "agent",
+                **{k: v for k, v in data.items() if k != "description" and v is not None}
+            }
+            
+            new_task = Task(**task_data)
+            db.add(new_task)
+            await db.commit()
+            await db.refresh(new_task)
+            
+            logger.info("Task created", task_id=new_task.id, description=description[:50])
+            return {"ok": True, "data": new_task.dict()}
+            
+    except Exception as e:
+        logger.error("Error creating task", error=str(e), data=data)
+        return {"ok": False, "error": f"Failed to create task: {str(e)}"}
+
+async def read_raw_notes(filters: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Read raw notes with optional filtering.
+    
+    Args:
+        filters: {
+            "source": str (optional) - "slack", "granola"
+            "author": str (optional)
+            "after_date": str (optional, ISO format)
+            "before_date": str (optional, ISO format)
+            "content_query": str (optional) - text search
+            "vector_query": str (optional) - semantic search
+            "limit": int (optional, default 50)
+        }
+    
+    Returns:
+        {"ok": true, "data": [notes]} or {"ok": false, "error": "message"}
+    """
+    try:
+        filters = filters or {}
+        
+        async with get_db() as db:
+            query = select(RawNote).order_by(RawNote.created_at.desc())
+            
+            # Apply filters
+            if filters.get("source"):
+                query = query.where(RawNote.source == filters["source"])
+            
+            if filters.get("author"):
+                query = query.where(RawNote.author == filters["author"])
+            
+            if filters.get("after_date"):
+                after_date = datetime.fromisoformat(filters["after_date"])
+                query = query.where(RawNote.created_at >= after_date)
+            
+            if filters.get("before_date"):
+                before_date = datetime.fromisoformat(filters["before_date"])
+                query = query.where(RawNote.created_at <= before_date)
+            
+            if filters.get("content_query"):
+                content_query = f"%{filters['content_query']}%"
+                query = query.where(RawNote.content.ilike(content_query))
+            
+            # Vector similarity search
+            if filters.get("vector_query"):
+                # Generate embedding for query
+                query_embedding = await generate_embedding(filters["vector_query"])
+                # Use pgvector cosine similarity
+                query = query.where(
+                    RawNote.content_vector.cosine_distance(query_embedding) < 0.2
+                ).order_by(RawNote.content_vector.cosine_distance(query_embedding))
+            
+            # Limit results
+            limit = min(filters.get("limit", 50), 200)  # Cap at 200 for performance
+            query = query.limit(limit)
+            
+            result = await db.execute(query)
+            notes = result.scalars().all()
+            
+            notes_data = [note.dict() for note in notes]
+            logger.info("Raw notes retrieved", count=len(notes_data), filters=filters)
+            
+            return {"ok": True, "data": notes_data}
+            
+    except Exception as e:
+        logger.error("Error reading raw notes", error=str(e), filters=filters)
+        return {"ok": False, "error": f"Failed to read notes: {str(e)}"}
+```
+# Meta tools for human-in-the-loop
+```
+async def ask_for_confirmation(prompt: str, thread_id: int) -> Dict[str, Any]:
+    """
+    Pause agent and request human confirmation.
+    
+    This function will:
+    1. Write a system message to the thread
+    2. Set thread status to 'paused'
+    3. Wait for human response via UI
+    """
+    try:
+        async with get_db() as db:
+            # Add system message
+            message = Message(
+                thread_id=thread_id,
+                content=prompt,
+                role="system",
+                created_at=datetime.utcnow()
+            )
+            db.add(message)
+            
+            # Update thread status
+            await db.execute(
+                update(Thread).where(Thread.id == thread_id).values(
+                    status="paused"
+                )
+            )
+            await db.commit()
+            
+            logger.info("Agent paused for confirmation", thread_id=thread_id, prompt=prompt[:100])
+            return {"ok": True, "data": {"status": "paused", "message": "Awaiting human confirmation"}}
+            
+    except Exception as e:
+        logger.error("Error requesting confirmation", error=str(e), thread_id=thread_id)
+        return {"ok": False, "error": f"Failed to request confirmation: {str(e)}"}
+```

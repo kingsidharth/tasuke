@@ -1,0 +1,332 @@
+---
+description: Frontend Rules (Shadcn + Reflex)
+globs: 
+alwaysApply: false
+---
+
+# FRONTEND (REFLEX + SHADCN/UI) RULES
+
+## Reflex Application Structure
+- Use functional components exclusively with proper state management
+- Implement real-time updates using Reflex's reactive variables
+- Follow shadcn/ui design system for consistent styling
+- Structure: pages for routes, components for reusable UI, state for data management
+
+## Reflex State Management Pattern
+```
+python
+import reflex as rx
+from typing import List, Dict, Optional
+from datetime import datetime
+import httpx
+
+class AppState(rx.State):
+    """Global application state."""
+    
+    # UI state
+    loading: bool = False
+    error_message: str = ""
+    
+    # Data
+    threads: List[Dict] = []
+    tasks: List[Dict] = []
+    current_thread_id: Optional[int] = None
+    
+    # WebSocket for real-time updates
+    websocket_connected: bool = False
+    
+    async def load_threads(self):
+        """Load threads from API."""
+        self.loading = True
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get("http://localhost:8000/api/v1/threads")
+                if response.status_code == 200:
+                    self.threads = response.json()
+                else:
+                    self.error_message = f"Failed to load threads: {response.status_code}"
+        except Exception as e:
+            self.error_message = f"Error loading threads: {str(e)}"
+        finally:
+            self.loading = False
+    
+    async def select_thread(self, thread_id: int):
+        """Select a thread and load its details."""
+        self.current_thread_id = thread_id
+        await self.load_thread_messages(thread_id)
+    
+    async def load_thread_messages(self, thread_id: int):
+        """Load messages for a specific thread."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"http://localhost:8000/api/v1/threads/{thread_id}/messages")
+                if response.status_code == 200:
+                    messages = response.json()
+                    # Update thread in list
+                    for thread in self.threads:
+                        if thread["id"] == thread_id:
+                            thread["messages"] = messages
+                            break
+        except Exception as e:
+            self.error_message = f"Error loading messages: {str(e)}"
+    
+    async def resume_thread(self, thread_id: int):
+        """Resume a paused thread."""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"http://localhost:8000/api/v1/threads/{thread_id}/resume")
+                if response.status_code == 200:
+                    await self.load_threads()  # Refresh
+                else:
+                    self.error_message = f"Failed to resume thread: {response.status_code}"
+        except Exception as e:
+            self.error_message = f"Error resuming thread: {str(e)}"
+
+class ThreadState(AppState):
+    """State for thread-specific functionality."""
+    
+    message_input: str = ""
+    uploading_file: bool = False
+    
+    async def send_message(self):
+        """Send message to current thread."""
+        if not self.message_input.strip() or not self.current_thread_id:
+            return
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"http://localhost:8000/api/v1/threads/{self.current_thread_id}/messages",
+                    json={"content": self.message_input, "role": "user"}
+                )
+                
+                if response.status_code == 200:
+                    self.message_input = ""
+                    await self.load_thread_messages(self.current_thread_id)
+                else:
+                    self.error_message = f"Failed to send message: {response.status_code}"
+                    
+        except Exception as e:
+            self.error_message = f"Error sending message: {str(e)}"
+    
+    async def upload_file(self, files: List[rx.UploadFile]):
+        """Handle file upload to current thread."""
+        if not files or not self.current_thread_id:
+            return
+        
+        self.uploading_file = True
+        try:
+            for file in files:
+                # Upload file to backend
+                async with httpx.AsyncClient() as client:
+                    files_data = {"file": (file.filename, file.content, file.content_type)}
+                    response = await client.post(
+                        f"http://localhost:8000/api/v1/threads/{self.current_thread_id}/upload",
+                        files=files_data
+                    )
+                    
+                    if response.status_code == 200:
+                        await self.load_thread_messages(self.current_thread_id)
+                    else:
+                        self.error_message = f"Failed to upload file: {response.status_code}"
+                        
+        except Exception as e:
+            self.error_message = f"Error uploading file: {str(e)}"
+        finally:
+            self.uploading_file = False
+```
+
+## Component Patterns with shadcn/ui
+```
+python
+import reflex as rx
+from typing import List, Dict
+
+def status_chip(status: str) -> rx.Component:
+    """Status chip component with consistent styling."""
+    color_map = {
+        "active": "bg-blue-100 text-blue-800",
+        "paused": "bg-yellow-100 text-yellow-800", 
+        "success": "bg-green-100 text-green-800",
+        "failed": "bg-red-100 text-red-800",
+        "queued": "bg-gray-100 text-gray-800"
+    }
+    
+    return rx.span(
+        status.title(),
+        class_name=f"inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {color_map.get(status, 'bg-gray-100 text-gray-800')}"
+    )
+
+def thread_card(thread: Dict) -> rx.Component:
+    """Thread card component for dashboard list."""
+    return rx.div(
+        rx.div(
+            rx.div(
+                rx.h3(
+                    thread.get("summary", "Untitled Thread")[:50] + ("..." if len(thread.get("summary", "")) > 50 else ""),
+                    class_name="text-lg font-semibold text-gray-900"
+                ),
+                rx.p(
+                    f"Agent: {thread.get('agent', 'Unknown')}",
+                    class_name="text-sm text-gray-600"
+                ),
+                class_name="flex-1"
+            ),
+            rx.div(
+                status_chip(thread.get("status", "unknown")),
+                rx.div(
+                    rx.button(
+                        "View",
+                        on_click=ThreadState.select_thread(thread["id"]),
+                        class_name="ml-2 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                    ),
+                    rx.cond(
+                        thread.get("status") == "paused",
+                        rx.button(
+                            "Resume",
+                            on_click=ThreadState.resume_thread(thread["id"]),
+                            class_name="ml-2 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                        )
+                    ),
+                    class_name="flex items-center"
+                ),
+                class_name="flex items-center justify-between"
+            ),
+            class_name="flex items-start justify-between"
+        ),
+        rx.div(
+            rx.p(
+                f"Created: {thread.get('created_at', '')}",
+                class_name="text-xs text-gray-500"
+            ),
+            rx.cond(
+                thread.get("completed_at"),
+                rx.p(
+                    f"Completed: {thread.get('completed_at', '')}",
+                    class_name="text-xs text-gray-500"
+                )
+            ),
+            class_name="mt-2"
+        ),
+        class_name="bg-white p-4 rounded-lg shadow border border-gray-200 hover:shadow-md transition-shadow cursor-pointer",
+        on_click=ThreadState.select_thread(thread["id"])
+    )
+
+def message_bubble(message: Dict) -> rx.Component:
+    """Message bubble for thread detail view."""
+    is_user = message.get("role") == "user"
+    is_system = message.get("role") == "system"
+    
+    bubble_class = "max-w-[70%] p-3 rounded-lg"
+    if is_user:
+        bubble_class += " bg-blue-600 text-white ml-auto"
+    elif is_system:
+        bubble_class += " bg-yellow-50 border border-yellow-200 text-yellow-800 mx-auto"
+    else:
+        bubble_class += " bg-gray-100 text-gray-900"
+    
+    return rx.div(
+        rx.div(
+            rx.p(
+                message.get("content", ""),
+                class_name="text-sm whitespace-pre-wrap"
+            ),
+            rx.cond(
+                message.get("tool_calls"),
+                rx.div(
+                    "🔧 Tool calls executed",
+                    class_name="text-xs opacity-75 mt-1"
+                )
+            ),
+            class_name=bubble_class
+        ),
+        rx.p(
+            message.get("created_at", ""),
+            class_name="text-xs text-gray-500 mt-1"
+        ),
+        class_name=f"mb-4 flex flex-col {'items-end' if is_user else 'items-start' if not is_system else 'items-center'}"
+    )
+
+def chat_input() -> rx.Component:
+    """Chat input component with file upload."""
+    return rx.div(
+        rx.div(
+            rx.upload(
+                rx.div(
+                    rx.icon("upload", size=16),
+                    "Upload",
+                    class_name="flex items-center gap-2 px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-l border border-r-0 border-gray-300 hover:bg-gray-200"
+                ),
+                accept={
+                    "image/*": [".png", ".jpg", ".jpeg", ".gif"],
+                    "application/pdf": [".pdf"]
+                },
+                on_upload=ThreadState.upload_file,
+                disabled=ThreadState.uploading_file
+            ),
+            rx.input(
+                placeholder="Type your message...",
+                value=ThreadState.message_input,
+                on_change=ThreadState.set_message_input,
+                on_key_down=lambda key: ThreadState.send_message() if key == "Enter" else None,
+                class_name="flex-1 px-3 py-2 border border-l-0 border-r-0 border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            ),
+            rx.button(
+                rx.cond(
+                    ThreadState.loading,
+                    rx.icon("loader", class_name="animate-spin"),
+                    rx.icon("send", size=16)
+                ),
+                on_click=ThreadState.send_message,
+                disabled=ThreadState.loading | (ThreadState.message_input.strip() == ""),
+                class_name="px-4 py-2 bg-blue-600 text-white rounded-r hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            ),
+            class_name="flex"
+        ),
+        class_name="border-t border-gray-200 p-4"
+    )
+
+def sidebar() -> rx.Component:
+    """Navigation sidebar."""
+    return rx.div(
+        rx.div(
+            rx.h2("Tasuke", class_name="text-xl font-bold text-gray-900"),
+            rx.p("AI Agent Platform", class_name="text-sm text-gray-600"),
+            class_name="p-4 border-b border-gray-200"
+        ),
+        rx.nav(
+            rx.a(
+                rx.icon("home", size=16),
+                "Dashboard",
+                href="/",
+                class_name="flex items-center gap-3 px-4 py-2 text-gray-700 hover:bg-gray-100"
+            ),
+            rx.a(
+                rx.icon("message-circle", size=16),
+                "Threads",
+                href="/threads",
+                class_name="flex items-center gap-3 px-4 py-2 text-gray-700 hover:bg-gray-100"
+            ),
+            rx.a(
+                rx.icon("check-square", size=16),
+                "Tasks",
+                href="/tasks",
+                class_name="flex items-center gap-3 px-4 py-2 text-gray-700 hover:bg-gray-100"
+            ),
+            rx.a(
+                rx.icon("database", size=16),
+                "Database",
+                href="/database",
+                class_name="flex items-center gap-3 px-4 py-2 text-gray-700 hover:bg-gray-100"
+            ),
+            rx.a(
+                rx.icon("settings", size=16),
+                "Settings",
+                href="/settings",
+                class_name="flex items-center gap-3 px-4 py-2 text-gray-700 hover:bg-gray-100"
+            ),
+            class_name="py-4"
+        ),
+        class_name="w-64 bg-white border-r border-gray-200 h-full"
+    )
+```
