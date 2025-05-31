@@ -47,11 +47,13 @@ Ensure redis is running `redis-server`
 
 
 ### Run Frontend Server
+1. `cd` into frontend folder
+2. run `npm run dev`
 
 ## MVP Phases
 See `docs/prd.md` for full product requirements and phase breakdown.
 
 ---
 
-- FastAPI, SQLAlchemy, Alembic, Loguru, LangGraph, Reflex, PostgreSQL, pgvector
+- FastAPI, SQLAlchemy, Alembic, Loguru, LangGraph, Shadncn, NextJS, React, PostgreSQL, pgvector
 - All secrets/config in `.env` (never commit this file) 

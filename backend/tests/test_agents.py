@@ -56,6 +56,30 @@ async def test_run_data_agent_lifecycle():
     assert result["ok"] is True
     assert get_thread_status(thread_id) == "success"
 
+@pytest.mark.asyncio
+def test_data_agent_model_and_temperature_override(monkeypatch):
+    thread_id = create_thread(status="planning")
+    monkeypatch.setenv("DATA_AGENT_MODEL", "test-model-override")
+    monkeypatch.setenv("DATA_AGENT_TEMPERATURE", "0.42")
+    # Patch openrouter_client to capture params
+    from backend.app.core.openrouter import openrouter_client
+    called = {}
+    orig_chat_completion = openrouter_client.chat_completion
+    async def fake_chat_completion(*args, **kwargs):
+        called["model"] = kwargs.get("model")
+        called["temperature"] = kwargs.get("temperature")
+        class Dummy:
+            choices = [type("obj", (object,), {"message": type("obj", (object,), {"content": "test"})()})]
+        return Dummy()
+    openrouter_client.chat_completion = fake_chat_completion
+    # Run agent
+    from backend.app.agents.data_agent import run_data_agent
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(run_data_agent(thread_id))
+    openrouter_client.chat_completion = orig_chat_completion
+    assert called["model"] == "test-model-override"
+    assert called["temperature"] == 0.42
+
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 SLACK_TEST_CHANNEL = os.getenv("SLACK_TEST_CHANNEL")  # Add this to .env for test channel

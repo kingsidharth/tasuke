@@ -4,14 +4,15 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from backend.app.tools.raw_notes_tools import read_raw_notes, write_raw_notes
+from backend.app.tools.raw_notes_tools import read_raw_notes, write_raw_notes, write_message
 from backend.app.core.logging import logger
-from backend.app.db.models import Thread
+from backend.app.db.models import Thread, Message
 from backend.app.db.session import get_db
 from backend.app.core.openrouter import openrouter_client
 import asyncio
 from datetime import datetime
 import os
+from backend.app.core.config import settings
 
 
 now = datetime.now()
@@ -87,7 +88,8 @@ def create_data_agent():
     async def ingest_notes(state: AgentState) -> AgentState:
         logger.info("Data Agent ingesting notes", thread_id=state["thread_id"])
         try:
-            # LLM call to process notes
+            model = os.getenv("DATA_AGENT_MODEL", settings.OPENROUTER_DEFAULT_MODEL)
+            temperature = float(os.getenv("DATA_AGENT_TEMPERATURE", settings.OPENROUTER_DEFAULT_TEMPERATURE))
             response = await openrouter_client.chat_completion(
                 messages=[{"role": "system", "content": state["prompt"]}] + [m.dict() for m in state["messages"]],
                 tools=[
@@ -108,18 +110,30 @@ def create_data_agent():
                         }
                     }
                 ],
+                model=model,
+                temperature=temperature,
                 tool_choice="auto"
             )
             msg = response.choices[0].message
+            # Store agent message
+            await write_message({
+                "thread_id": state["thread_id"],
+                "role": msg.role if hasattr(msg, "role") else "assistant",
+                "content": msg.content,
+                "model": model
+            })
             new_message = HumanMessage(content=msg.content)
             return {**state, "messages": [new_message]}
         except Exception as e:
             logger.error("Data Agent error", error=str(e), thread_id=state["thread_id"])
+            from loguru import logger as failed_logger
+            failed_logger.add("logs/data_agent_failed.log", rotation="00:00", retention="90 days", level="ERROR", serialize=False)
+            failed_logger.error("Data Agent failed", thread_id=state["thread_id"], error_count=state["error_count"]+1, last_error=str(e), prompt=state["prompt"])
             return {
                 **state,
                 "status": "failed",
                 "error_count": state["error_count"] + 1,
-                "last_error": str(e)
+                "last_error": str(e) or "Unknown error"
             }
 
     workflow = StateGraph(AgentState)
@@ -131,6 +145,16 @@ def create_data_agent():
 
 async def run_data_agent(thread_id: int, prompt: str = agent_prompt):
     logger.info("Starting Data Agent (LangGraph)", thread_id=thread_id)
+    db = next(get_db())
+    # Store the agent prompt as the first message if not already present
+    existing_prompt = db.query(Message).filter(Message.thread_id == thread_id, Message.role == "system").first()
+    if not existing_prompt:
+        await write_message({
+            "thread_id": thread_id,
+            "role": "system",
+            "content": prompt,
+            "model": None
+        })
     agent = create_data_agent()
     initial_state = {
         "messages": [],
@@ -145,10 +169,15 @@ async def run_data_agent(thread_id: int, prompt: str = agent_prompt):
     # Patch for test: if running under pytest, force success
     if "PYTEST_CURRENT_TEST" in os.environ:
         final_state["status"] = "success"
-    db = next(get_db())
     thread = db.query(Thread).filter(Thread.id == thread_id).first()
     if thread:
         thread.status = final_state["status"]
+        thread.error_count = final_state.get("error_count", 0)
+        thread.last_error = final_state.get("last_error", "") if final_state["status"] == "failed" else ""
         db.commit()
+    if final_state["status"] == "failed":
+        from loguru import logger as failed_logger
+        failed_logger.add("logs/data_agent_failed.log", rotation="00:00", retention="90 days", level="ERROR", serialize=False)
+        failed_logger.error("Data Agent failed (final)", thread_id=thread_id, error_count=final_state.get("error_count", 0), last_error=final_state.get("last_error", ""), prompt=prompt)
     logger.info("Data Agent completed (LangGraph)", thread_id=thread_id, final_status=final_state["status"])
     return {"ok": final_state["status"] == "success", **final_state} 

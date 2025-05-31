@@ -1,6 +1,6 @@
 import hashlib
 from datetime import datetime
-from backend.app.db.models import RawNote
+from backend.app.db.models import RawNote, Message
 from backend.app.db.session import get_db
 from backend.app.core.logging import logger
 
@@ -61,4 +61,55 @@ async def write_raw_notes(data):
         return {"ok": True, "id": note.id}
     except Exception as e:
         logger.error("Error writing raw note", error=str(e), data=data)
+        return {"ok": False, "error": str(e)}
+
+async def write_message(data):
+    """
+    Write a new message to the messages table.
+    Args: data: dict (must include thread_id, role, content; optional: model, tool_call_id)
+    Returns: {"ok": True, "id": id} or {"ok": False, "error": ...}
+    """
+    try:
+        db = next(get_db())
+        msg = Message(
+            thread_id=data["thread_id"],
+            content=data["content"],
+            role=data["role"],
+            model=data.get("model"),
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        logger.info("Message written", id=msg.id, thread_id=msg.thread_id, role=msg.role)
+        return {"ok": True, "id": msg.id}
+    except Exception as e:
+        logger.error("Error writing message", error=str(e), data=data)
+        return {"ok": False, "error": str(e)}
+
+async def read_messages(filters=None):
+    """
+    Read messages for a thread.
+    Args: filters: dict (must include thread_id)
+    Returns: {"ok": True, "data": [messages]} or {"ok": False, "error": ...}
+    """
+    try:
+        db = next(get_db())
+        thread_id = filters["thread_id"]
+        query = db.query(Message).filter(Message.thread_id == thread_id).order_by(Message.created_at.asc())
+        messages = query.all()
+        messages_data = [
+            {
+                "id": m.id,
+                "content": m.content,
+                "role": m.role,
+                "model": m.model,
+                "created_at": m.created_at,
+                "tool_call_id": None  # Extend if tool calls are tracked
+            }
+            for m in messages
+        ]
+        logger.info("Messages retrieved", count=len(messages_data), thread_id=thread_id)
+        return {"ok": True, "data": messages_data}
+    except Exception as e:
+        logger.error("Error reading messages", error=str(e), filters=filters)
         return {"ok": False, "error": str(e)} 

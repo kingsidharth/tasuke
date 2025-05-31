@@ -22,4 +22,24 @@
 - Added sidebar navigation with Shadcn Navigation Menu (Dashboard, Tasks, Projects, Logs, Settings)
 - Polished UI with Shadcn Skeleton, Alert, Card, Table, Badge
 - Added header and improved layout/spacing
-- Updated README with correct start/test instructions 
+- Updated README with correct start/test instructions
+
+## [Phase 2] OpenRouter Config Refactor
+- Refactored OpenRouter client to load base_url, default model, and temperature from .env via config.py
+- Removed all hardcoded model, temperature, and base_url from backend/app/core/openrouter.py
+- Added OPENROUTER_BASE_URL, OPENROUTER_DEFAULT_MODEL, OPENROUTER_DEFAULT_TEMPERATURE to .env and example.env
+- Added per-agent override support for model and temperature (e.g., DATA_AGENT_MODEL, DATA_AGENT_TEMPERATURE)
+- Updated backend/app/agents/data_agent.py to use per-agent or global config
+- Added/updated tests to verify config and override logic
+
+## [Phase 3] Slack Sync
+- Fixed scripts/slack_sync.py import and async issues; now logs to logs/slack_sync.log and works with async DB tools
+- Added logs/data_agent_failed.log for all failed agent runs (with thread_id, error_count, last_error, prompt)
+- Added logs/openrouter.log for all OpenRouter API calls and responses
+- Improved error handling and logging in data_agent and openrouter client
+- Verified Slack sync now works and logs correctly
+
+## [Phase 4] Chat View
+- Added chat view at /thread/[id] with message history and message box (frontend/src/app/thread/[id]/page.tsx)
+- Dashboard now supports filters, sorting, agent list, and navigation to chat view
+- Added backend endpoints: GET/POST /api/v1/threads/{thread_id}/messages for thread chat integration 
